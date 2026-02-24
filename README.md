@@ -42,6 +42,14 @@ cd p009_memory_fabric_global
 bash scripts/install.sh
 ```
 
+## P008 Resolution Order
+
+The install script locates P008 Memory Hub in this order:
+
+1. **`MEMORY_FABRIC_P008_PATH`** environment variable (if set and directory exists) → `pip install -e`
+2. **Relative path**: `../p008_memory_hub` (side-by-side clone) → `pip install -e`
+3. **GitHub pip install**: `git+https://github.com/cait52099/p008_memory_hub.git`
+
 ## Install (Global)
 
 ```bash
