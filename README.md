@@ -12,13 +12,40 @@ A distributable, **global and invisible** integration that makes **Memory Fabric
 ## Prerequisites
 
 - Claude Code installed and configured
-- P008 Memory Hub exists at:
-  `/Users/caihongwei/clawd/projects/p008_memory_hub`
+
+## Installation Options
+
+### Option 1: Clone both repos side-by-side (recommended)
+
+```bash
+# Clone both repos in the same parent directory
+git clone https://github.com/cait52099/p008_memory_hub.git
+git clone https://github.com/cait52099/p009_memory_fabric_global.git
+cd p009_memory_fabric_global
+bash scripts/install.sh
+```
+
+### Option 2: Set custom P008 path
+
+```bash
+# If P008 is in a different location, set environment variable
+export MEMORY_FABRIC_P008_PATH=/path/to/p008_memory_hub
+cd p009_memory_fabric_global
+bash scripts/install.sh
+```
+
+### Option 3: Install P008 from GitHub
+
+```bash
+# If you don't have P008 locally, install.sh will install it from GitHub
+cd p009_memory_fabric_global
+bash scripts/install.sh
+```
 
 ## Install (Global)
 
 ```bash
-cd /Users/caihongwei/clawd/projects/p009_memory_fabric_global
+cd p009_memory_fabric_global
 bash scripts/install.sh
 ```
 

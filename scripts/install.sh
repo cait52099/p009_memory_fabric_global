@@ -13,12 +13,29 @@ VENV_DIR="${RUNTIME_DIR}/venv"
 WRAP_DIR="${RUNTIME_DIR}/bin"
 WRAPPER="${WRAP_DIR}/memory-hub"
 
-P008_PATH="/Users/caihongwei/clawd/projects/p008_memory_hub"
+RUNTIME_DIR="${HOME_DIR}/.local/share/memory-fabric"
+VENV_DIR="${RUNTIME_DIR}/venv"
+WRAP_DIR="${RUNTIME_DIR}/bin"
+WRAPPER="${WRAP_DIR}/memory-hub"
 
-echo "==> [1/6] Ensure Claude dirs"
+echo "==> [1/7] Determine P008 location"
+P008_INSTALL_METHOD=""
+if [ -n "${MEMORY_FABRIC_P008_PATH:-}" ] && [ -d "${MEMORY_FABRIC_P008_PATH}" ]; then
+  P008_PATH="${MEMORY_FABRIC_P008_PATH}"
+  P008_INSTALL_METHOD="env var (${P008_PATH})"
+elif [ -d "${ROOT}/../p008_memory_hub" ]; then
+  P008_PATH="${ROOT}/../p008_memory_hub"
+  P008_INSTALL_METHOD="relative (${P008_PATH})"
+else
+  P008_PATH=""
+  P008_INSTALL_METHOD="git+https"
+fi
+echo "  Using P008: ${P008_INSTALL_METHOD}"
+
+echo "==> [2/7] Ensure Claude dirs"
 mkdir -p "${CLAUDE_DIR}/hooks"
 
-echo "==> [2/6] Install/Update hooks (copy code, keep cache/logs)"
+echo "==> [3/7] Install/Update hooks (copy code, keep cache/logs)"
 mkdir -p "${HOOKS_DST}"
 cp -f "${HOOKS_SRC}/_util.py" "${HOOKS_DST}/_util.py"
 cp -f "${HOOKS_SRC}/user_prompt_submit.py" "${HOOKS_DST}/user_prompt_submit.py"
@@ -27,15 +44,20 @@ cp -f "${HOOKS_SRC}/pre_compact.py" "${HOOKS_DST}/pre_compact.py"
 cp -f "${HOOKS_SRC}/session_end.py" "${HOOKS_DST}/session_end.py"
 mkdir -p "${HOOKS_DST}/cache" "${HOOKS_DST}/logs"
 
-echo "==> [3/6] Ensure runtime venv + install p008"
+echo "==> [4/7] Ensure runtime venv + install p008"
 mkdir -p "${RUNTIME_DIR}" "${WRAP_DIR}"
 if [ ! -x "${VENV_DIR}/bin/python" ]; then
   python3 -m venv "${VENV_DIR}"
 fi
 "${VENV_DIR}/bin/python" -m pip install -U pip
-"${VENV_DIR}/bin/pip" install -e "${P008_PATH}"
+if [ -n "${P008_PATH}" ]; then
+  "${VENV_DIR}/bin/pip" install -e "${P008_PATH}"
+else
+  echo "  Installing P008 from GitHub..."
+  "${VENV_DIR}/bin/pip" install "git+https://github.com/cait52099/p008_memory_hub.git"
+fi
 
-echo "==> [4/6] Ensure wrapper ${WRAPPER}"
+echo "==> [5/7] Ensure wrapper ${WRAPPER}"
 
 # Auto-detect the correct CLI module entrypoint (robust across p008 changes)
 ENTRYPOINT_MODULE=""
@@ -60,7 +82,7 @@ EOF
 chmod +x "${WRAPPER}"
 "${WRAPPER}" --help >/dev/null
 
-echo "==> [5/6] Patch ~/.claude/settings.json (backup + merge hooks block)"
+echo "==> [6/7] Patch ~/.claude/settings.json (backup + merge hooks block)"
 mkdir -p "${CLAUDE_DIR}"
 if [ -f "${SETTINGS}" ]; then
   cp "${SETTINGS}" "${SETTINGS}.bak.$(date +%Y%m%d_%H%M%S)"
@@ -100,5 +122,5 @@ settings.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encod
 print("settings.json patched with memory_fabric hooks")
 PY
 
-echo "==> [6/6] Done. Run doctor:"
+echo "==> [7/7] Done. Run doctor:"
 echo "  ${ROOT}/scripts/doctor.sh"
