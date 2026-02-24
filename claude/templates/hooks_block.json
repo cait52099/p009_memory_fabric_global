@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/caihongwei/.local/share/memory-fabric/venv/bin/python /Users/caihongwei/.claude/hooks/memory_fabric/user_prompt_submit.py"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/caihongwei/.local/share/memory-fabric/venv/bin/python /Users/caihongwei/.claude/hooks/memory_fabric/stop.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/caihongwei/.local/share/memory-fabric/venv/bin/python /Users/caihongwei/.claude/hooks/memory_fabric/pre_compact.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/caihongwei/.local/share/memory-fabric/venv/bin/python /Users/caihongwei/.claude/hooks/memory_fabric/session_end.py"
+          }
+        ]
+      }
+    ]
+  }
+}
