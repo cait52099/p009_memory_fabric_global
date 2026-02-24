@@ -36,9 +36,26 @@ fi
 "${VENV_DIR}/bin/pip" install -e "${P008_PATH}"
 
 echo "==> [4/6] Ensure wrapper ${WRAPPER}"
+
+# Auto-detect the correct CLI module entrypoint (robust across p008 changes)
+ENTRYPOINT_MODULE=""
+CANDIDATES=("cli.commands" "memory_hub.cli" "memory_hub.cli.main")
+
+for mod in "${CANDIDATES[@]}"; do
+  if "${VENV_DIR}/bin/python" -m "${mod}" --help >/dev/null 2>&1; then
+    ENTRYPOINT_MODULE="${mod}"
+    break
+  fi
+done
+
+if [ -z "${ENTRYPOINT_MODULE}" ]; then
+  echo "WARN: could not auto-detect CLI module; falling back to cli.commands" >&2
+  ENTRYPOINT_MODULE="cli.commands"
+fi
+
 cat > "${WRAPPER}" <<EOF
 #!/usr/bin/env bash
-exec "${VENV_DIR}/bin/python" -m memory_hub.cli "\$@"
+exec "${VENV_DIR}/bin/python" -m ${ENTRYPOINT_MODULE} "\$@"
 EOF
 chmod +x "${WRAPPER}"
 "${WRAPPER}" --help >/dev/null
