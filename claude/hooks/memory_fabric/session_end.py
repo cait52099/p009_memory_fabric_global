@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-# SessionEnd hook - promote session notes to project memory
+# SessionEnd hook - promote session notes to project memory + global registry
 
 import json
+import subprocess
 import sys
 import os
+from datetime import datetime
 
 # Add hooks dir to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -19,6 +21,53 @@ from _util import (
 )
 
 
+def get_git_remote_url(cwd: str) -> str:
+    """Get git remote origin URL if available."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def write_global_registry_snapshot(project_id: str, cwd: str, session_id: str):
+    """Write a user-scope snapshot to the global project registry."""
+    git_url = get_git_remote_url(cwd)
+    timestamp = datetime.now().isoformat()
+
+    # Build compact content: project_id | git_url | timestamp | 1-3 line summary
+    cache = read_cache(session_id)
+    summary_line = ""
+    if cache:
+        user_prompt = cache.get("user_prompt", "")
+        if user_prompt:
+            summary_line = user_prompt[:100].replace("\n", " ")
+
+    # Content format: "project_id | git_url | timestamp | what_was_done"
+    content = f"{project_id} | {git_url} | {timestamp} | {summary_line}"
+
+    output, code = run_memory_hub([
+        "write",
+        content,
+        "--type", "project_snapshot",
+        "--source", "global:project_registry",
+        "--importance", "0.6"
+    ])
+
+    if code == 0:
+        log_message(f"Global registry snapshot written for {project_id}", session_id)
+    else:
+        log_message(f"Error writing registry snapshot: {output}", session_id)
+
+
 def main():
     hook_input = read_hook_input()
 
@@ -28,6 +77,9 @@ def main():
     project_id = get_project_id(cwd)
     log_message(f"SessionEnd: project={project_id}, session={session_id}", session_id)
 
+    # Write global project registry snapshot
+    write_global_registry_snapshot(project_id, cwd, session_id)
+
     # Read cached session data
     cache = read_cache(session_id)
 
@@ -36,17 +88,17 @@ def main():
         sys.exit(0)
 
     # Summarize session - get memories for this session and promote importance
-    # For now, just write a summary note
+    # Write project-specific summary
     user_prompt = cache.get("user_prompt", "")
     if user_prompt:
-        # Write summary
+        # Write summary to project scope
         summary_content = f"[session-end:{session_id}] Session summary: {user_prompt[:200]}"
 
         output, code = run_memory_hub([
             "write",
             summary_content,
             "--type", "summary",
-            "--source", f"session:{session_id}",
+            "--source", f"project:{project_id}",
             "--importance", "0.5"
         ])
 
@@ -55,7 +107,7 @@ def main():
         else:
             log_message(f"Error: {output}", session_id)
 
-    # Clean up cache (optional - could keep for history)
+    # Clean up cache
     cache_file = os.path.expanduser(f"~/.claude/hooks/memory_fabric/cache/{session_id}.json")
     if os.path.exists(cache_file):
         try:

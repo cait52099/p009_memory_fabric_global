@@ -66,6 +66,39 @@ except Exception as e:
     sys.exit(1)
 " && echo "OK: No override marker when prompt has no project mention"
 
+echo "==> Global Project Registry: write snapshot and verify retrieval"
+# Step 1: Write a registry snapshot for p009_memory_fabric_global
+REGISTRY_TOKEN="REGISTRY_E2E_TOKEN_$(date +%s)"
+"${WRAPPER}" write "p009_memory_fabric_global | https://github.com/test/p009 | 2026-02-26T12:00:00Z | ${REGISTRY_TOKEN}" --type project_snapshot --source "global:project_registry" >/dev/null
+echo "Wrote registry token: ${REGISTRY_TOKEN}"
+
+# Step 2: Call hook with generic prompt asking about recent projects
+INPUT_REG='{"hookEventName":"UserPromptSubmit","session_id":"doctor-registry","cwd":"/tmp","prompt":"what projects have we been working on recently?"}'
+OUTPUT_REG=$(echo "$INPUT_REG" | "${VENV_PY}" "${HOOK}")
+
+# Step 3: Assert Recent Projects block exists AND contains the registry token
+echo "$OUTPUT_REG" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    ctx = d.get('hookSpecificOutput', {}).get('additionalContext', '')
+    # Check for Recent Projects section
+    if '## Recent Projects' not in ctx:
+        print('FAIL: Recent Projects section not found')
+        print('Context:', ctx[:500])
+        sys.exit(1)
+    # Check for p009 token
+    if '${REGISTRY_TOKEN}' in ctx:
+        sys.exit(0)
+    else:
+        print('FAIL: registry token not found in Recent Projects')
+        print('Context:', ctx[:800])
+        sys.exit(1)
+except Exception as e:
+    print(f'FAIL: {e}')
+    sys.exit(1)
+" && echo "OK: Global Project Registry returns Recent Projects section with p009"
+
 echo "==> Hook mock: project override retrieves from project (E2E semantic test)"
 # Step 1: Write a unique memory into project p009_memory_fabric_global
 UNIQUE_TOKEN="OVERRIDE_E2E_TOKEN_$(date +%s)"

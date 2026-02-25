@@ -3,8 +3,10 @@ from __future__ import annotations
 # UserPromptSubmit hook - inject Memory Fabric context before Claude responds
 
 import json
+import subprocess
 import sys
 import os
+from datetime import datetime
 
 # Add hooks dir to path
 sys.path.insert(0, os.path.dirname(__file__))
@@ -18,6 +20,79 @@ from _util import (
     write_cache,
     log_message
 )
+
+# Max recent projects to show
+MAX_RECENT_PROJECTS = 8
+
+
+def fetch_recent_projects() -> list:
+    """Fetch recent project snapshots from global registry."""
+    # Search for project_registry entries
+    output, code = run_memory_hub([
+        "search",
+        "project_snapshot global:project_registry",
+        "--top-k", str(MAX_RECENT_PROJECTS),
+        "--json"
+    ])
+
+    if code != 0 or not output.strip():
+        return []
+
+    try:
+        results = json.loads(output.strip())
+    except json.JSONDecodeError:
+        return []
+
+    # Parse results - format is "project_id | git_url | timestamp | summary"
+    projects = []
+    for r in results:
+        content = r.get("content", "")
+        # Parse: "p009_memory_fabric_global | https://github.com/... | 2026-02-26T... | summary"
+        parts = content.split(" | ")
+        if len(parts) >= 1:
+            project_id = parts[0].strip()
+            git_url = parts[1].strip() if len(parts) > 1 else ""
+            timestamp = parts[2].strip() if len(parts) > 2 else ""
+            summary = parts[3].strip() if len(parts) > 3 else ""
+            projects.append({
+                "project_id": project_id,
+                "git_url": git_url,
+                "timestamp": timestamp,
+                "summary": summary
+            })
+
+    # Sort by timestamp descending (newest first)
+    projects.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+
+    # Deduplicate by project_id (keep newest)
+    seen = {}
+    unique = []
+    for p in projects:
+        pid = p["project_id"]
+        if pid and pid not in seen:
+            seen[pid] = True
+            unique.append(p)
+
+    return unique[:MAX_RECENT_PROJECTS]
+
+
+def format_recent_projects_block(projects: list) -> str:
+    """Format recent projects into a compact markdown block."""
+    if not projects:
+        return ""
+
+    lines = ["## Recent Projects"]
+    for p in projects:
+        pid = p.get("project_id", "?")
+        summary = p.get("summary", "")
+        if summary:
+            # Truncate summary to ~30 chars
+            summary = summary[:40] + "..." if len(summary) > 40 else summary
+            lines.append(f"- {pid} — {summary}")
+        else:
+            lines.append(f"- {pid}")
+
+    return "\n".join(lines)
 
 
 def main():
@@ -49,7 +124,11 @@ def main():
         "cwd": cwd
     })
 
-    # Build memory-hub assemble command
+    # ALWAYS fetch recent projects for the global registry snippet
+    recent_projects = fetch_recent_projects()
+    recent_block = format_recent_projects_block(recent_projects)
+
+    # Build memory-hub assemble command for project-specific context
     cmd = [
         "assemble",
         user_prompt,
@@ -77,6 +156,12 @@ def main():
     # Build context from result
     context_parts = []
     context_parts.append("<!-- MEMORY_FABRIC_CONTEXT -->")
+
+    # ALWAYS inject Recent Projects block first (global registry)
+    if recent_block:
+        context_parts.append(f"<!-- GLOBAL_PROJECT_REGISTRY -->")
+        context_parts.append(recent_block)
+        context_parts.append("<!-- END_GLOBAL_PROJECT_REGISTRY -->")
 
     # Add project override marker if applicable
     if project_override:
@@ -115,7 +200,7 @@ def main():
     }
 
     print(json.dumps(output_json))
-    log_message(f"Injected context ({len(context)} chars)", session_id)
+    log_message(f"Injected context ({len(context)} chars), recent_projects={len(recent_projects)}", session_id)
 
 
 if __name__ == "__main__":
