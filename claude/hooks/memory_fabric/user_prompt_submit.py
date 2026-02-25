@@ -27,11 +27,12 @@ MAX_RECENT_PROJECTS = 8
 
 def fetch_recent_projects() -> list:
     """Fetch recent project snapshots from global registry."""
-    # Search for project_registry entries
+    # Search for project_registry entries using --project filter for exact source match
     output, code = run_memory_hub([
         "search",
-        "project_snapshot global:project_registry",
+        "project_snapshot",
         "--top-k", str(MAX_RECENT_PROJECTS),
+        "--project", "global:project_registry",
         "--json"
     ])
 
@@ -44,6 +45,7 @@ def fetch_recent_projects() -> list:
         return []
 
     # Parse results - format is "project_id | git_url | timestamp | summary"
+    # Use raw content as sort key to get truly latest (includes token number)
     projects = []
     for r in results:
         content = r.get("content", "")
@@ -58,20 +60,24 @@ def fetch_recent_projects() -> list:
                 "project_id": project_id,
                 "git_url": git_url,
                 "timestamp": timestamp,
-                "summary": summary
+                "summary": summary,
+                "raw": content  # Use full content for sorting
             })
 
-    # Sort by timestamp descending (newest first)
-    projects.sort(key=lambda x: x.get("timestamp", ""), reverse=True)
+    # Sort by full content (most recent token number will be last when sorted ascending)
+    projects.sort(key=lambda x: x.get("raw", ""))
 
-    # Deduplicate by project_id (keep newest)
+    # Deduplicate by project_id - keep the entry with the latest content (last after sort)
     seen = {}
     unique = []
-    for p in projects:
+    for p in reversed(projects):  # Process in reverse to keep latest
         pid = p["project_id"]
         if pid and pid not in seen:
             seen[pid] = True
             unique.append(p)
+
+    # Reverse back to newest first
+    unique.reverse()
 
     return unique[:MAX_RECENT_PROJECTS]
 
