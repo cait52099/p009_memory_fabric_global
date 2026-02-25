@@ -2,29 +2,24 @@
 set -euo pipefail
 
 # Memory Fabric - OpenClaw Integration Validator
+# Strict Phase 1 E2E: Must attempt triggers and verify fresh artifacts
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPENCLAW_DIR="${HOME}/.openclaw"
 HOOK_NAME="memory-fabric-autowire"
-TEST_WORKSPACE="/tmp/memory-fabric-test-$$"
 TEMP_DIR="/tmp/openclaw-doctor-$$"
 mkdir -p "$TEMP_DIR"
 trap "rm -rf $TEMP_DIR" EXIT
 
-# Global variables for artifact checking
+# Global state
 GATEWAY_RUNNING=false
 WORKSPACE_DIR=""
-existing_artifacts=""
-existing_context=""
-existing_tools=""
-new_artifacts=""
-new_context=""
-new_tools=""
-final_artifacts=""
-final_context=""
-final_tools=""
+BACKUP_DIR=""
+artifacts=""
+has_context=""
+has_tools=""
 
-# Helper: Find OpenClaw config file (in order of preference)
+# Helper: Find OpenClaw config file
 find_config() {
     local config_candidates=(
         "${OPENCLAW_DIR}/config.json"
@@ -38,96 +33,119 @@ find_config() {
             return 0
         fi
     done
+    return 1
+}
 
+# Capability probing helpers
+has_cmd() {
+    command -v "$1" &>/dev/null
+}
+
+has_subcmd() {
+    local cmd="$1"
+    shift
+    local subcmd="$1"
+    # Try: openclaw agent --help (if subcmd is first arg)
+    if "$cmd" "$subcmd" --help &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+has_nested() {
+    local cmd="$1"
+    local subcmd="$2"
+    # Try: openclaw message send --help
+    if "$cmd" "$subcmd" --help &>/dev/null; then
+        return 0
+    fi
     return 1
 }
 
 CONFIG=$(find_config) || {
     echo "ERROR: No OpenClaw config found in ${OPENCLAW_DIR}"
-    echo "Tried: config.json, openclaw.json, clawdbot.json"
     exit 1
 }
 
 echo "==> Using config: ${CONFIG}"
 
 echo "==> [1/8] Check openclaw CLI"
-if ! command -v openclaw &> /dev/null; then
-  echo "ERROR: openclaw CLI not found"
-  exit 1
+if ! has_cmd openclaw; then
+    echo "ERROR: openclaw CLI not found"
+    exit 1
 fi
 echo "OK: openclaw CLI found"
 
 echo "==> [2/8] Check hook pack installed"
 HOOK_PATH="${OPENCLAW_DIR}/hooks/${HOOK_NAME}"
 if [ -d "${HOOK_PATH}" ]; then
-  echo "OK: Hook directory exists: ${HOOK_PATH}"
+    echo "OK: Hook directory exists: ${HOOK_PATH}"
 else
-  echo "ERROR: Hook not installed at ${HOOK_PATH}"
-  exit 1
+    echo "ERROR: Hook not installed at ${HOOK_PATH}"
+    exit 1
 fi
 
 if [ -f "${HOOK_PATH}/handler.ts" ]; then
-  echo "OK: handler.ts found"
+    echo "OK: handler.ts found"
 else
-  echo "ERROR: handler.ts not found"
-  exit 1
+    echo "ERROR: handler.ts not found"
+    exit 1
 fi
 
 echo "==> [3/8] Verify hook in openclaw hooks list"
 HOOKS_OUTPUT=$(openclaw hooks list 2>&1 || true)
 if echo "$HOOKS_OUTPUT" | grep -qi "memory-fabric"; then
-  echo "OK: Hook appears in 'openclaw hooks list'"
+    echo "OK: Hook appears in 'openclaw hooks list'"
 else
-  echo "ERROR: Hook '${HOOK_NAME}' not found in hooks list"
-  echo "DEBUG: $HOOKS_OUTPUT"
-  exit 1
+    echo "ERROR: Hook '${HOOK_NAME}' not found in hooks list"
+    exit 1
 fi
 
 echo "==> [4/8] Verify hook info"
 if openclaw hooks info "${HOOK_NAME}" 2>&1 | grep -q "Ready"; then
-  echo "OK: Hook is ready"
+    echo "OK: Hook is ready"
 else
-  echo "ERROR: Hook is not ready"
-  exit 1
+    echo "ERROR: Hook is not ready"
+    exit 1
 fi
 
 echo "==> [5/8] Verify config - hooks.internal.enabled=true"
 if [ -f "${CONFIG}" ]; then
-  INTERNAL_ENABLED=$(python3 -c "import json; c=json.load(open('${CONFIG}')); print(c.get('hooks',{}).get('internal',{}).get('enabled', False))")
-  if [ "${INTERNAL_ENABLED}" = "True" ]; then
-    echo "OK: hooks.internal.enabled = true"
-  else
-    echo "ERROR: hooks.internal.enabled is not true"
-    exit 1
-  fi
+    INTERNAL_ENABLED=$(python3 -c "import json; c=json.load(open('${CONFIG}')); print(c.get('hooks',{}).get('internal',{}).get('enabled', False))")
+    if [ "${INTERNAL_ENABLED}" = "True" ]; then
+        echo "OK: hooks.internal.enabled = true"
+    else
+        echo "ERROR: hooks.internal.enabled is not true"
+        exit 1
+    fi
 else
-  echo "ERROR: Config file not found: ${CONFIG}"
-  exit 1
+    echo "ERROR: Config file not found: ${CONFIG}"
+    exit 1
 fi
 
 echo "==> [6/8] Verify hook is enabled in config"
 HOOK_ENABLED=$(python3 -c "import json; c=json.load(open('${CONFIG}')); print(c.get('hooks',{}).get('internal',{}).get('entries',{}).get('${HOOK_NAME}',{}).get('enabled', False))" 2>/dev/null || echo "False")
 if [ "${HOOK_ENABLED}" = "True" ]; then
-  echo "OK: ${HOOK_NAME} is enabled in config"
+    echo "OK: ${HOOK_NAME} is enabled in config"
 else
-  echo "ERROR: ${HOOK_NAME} is NOT enabled in config"
-  exit 1
+    echo "ERROR: ${HOOK_NAME} is NOT enabled in config"
+    exit 1
 fi
 
 echo "==> [7/8] Check memory-hub CLI"
 MEMORY_HUB="${HOME}/.local/share/memory-fabric/bin/memory-hub"
 if [ -x "${MEMORY_HUB}" ]; then
-  echo "OK: memory-hub found at ${MEMORY_HUB}"
+    echo "OK: memory-hub found at ${MEMORY_HUB}"
 else
-  echo "ERROR: memory-hub not found at ${MEMORY_HUB}"
-  exit 1
+    echo "ERROR: memory-hub not found at ${MEMORY_HUB}"
+    exit 1
 fi
 
 if "${MEMORY_HUB}" --help >/dev/null 2>&1; then
-  echo "OK: memory-hub CLI works"
+    echo "OK: memory-hub CLI works"
 else
-  echo "ERROR: memory-hub CLI failed"
-  exit 1
+    echo "ERROR: memory-hub CLI failed"
+    exit 1
 fi
 
 echo "==> [8/8] E2E Test"
@@ -138,7 +156,6 @@ resolve_workspace() {
 import json
 try:
     c = json.load(open('${CONFIG}'))
-    # Check agents.defaults.workspace first (where it's actually defined)
     ws = c.get('agents',{}).get('defaults',{}).get('workspace')
     if ws:
         print(ws)
@@ -156,32 +173,43 @@ except:
 WORKSPACE_DIR=$(resolve_workspace)
 echo "Using workspace: ${WORKSPACE_DIR}"
 
-# Check for existing artifacts before triggering
+# Memory fabric directory
+MF_DIR="${WORKSPACE_DIR}/.memory_fabric"
+
+# Ensure memory fabric directory exists
+mkdir -p "$MF_DIR"
+
+# Backup existing artifacts before testing (to prevent false green)
+backup_artifacts() {
+    if [ -f "${MF_DIR}/context_pack.md" ] || [ -f "${MF_DIR}/TOOLS.md" ] || [ -f "${MF_DIR}/hook.log" ]; then
+        BACKUP_DIR="${MF_DIR}/.doctor_backup_$(date +%s)"
+        mkdir -p "$BACKUP_DIR"
+        mv "${MF_DIR}/context_pack.md" "${MF_DIR}/TOOLS.md" "${MF_DIR}/hook.log" "$BACKUP_DIR/" 2>/dev/null || true
+        echo "Backed up existing artifacts to: $BACKUP_DIR"
+    fi
+}
+
+# Check for artifacts
 check_artifacts() {
     local found_context=false
     local found_tools=false
 
-    shopt -s nullglob
-    for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${WORKSPACE_DIR}"/.memory_fabric; do
-        if [ -f "${check_dir}/context_pack.md" ] 2>/dev/null; then
-            found_context=true
-        fi
-        if [ -f "${check_dir}/TOOLS.md" ] 2>/dev/null; then
-            found_tools=true
-        fi
-    done
-    shopt -u nullglob
+    if [ -f "${MF_DIR}/context_pack.md" ]; then
+        found_context=true
+    fi
+    if [ -f "${MF_DIR}/TOOLS.md" ]; then
+        found_tools=true
+    fi
 
     echo "$found_context:$found_tools"
 }
 
 # Try to detect if gateway is running
-GATEWAY_RUNNING=false
 if openclaw gateway status --timeout 3000 >/dev/null 2>&1; then
-  GATEWAY_RUNNING=true
+    GATEWAY_RUNNING=true
 fi
 
-# Multi-strategy E2E trigger function
+# E2E trigger function with timeout
 trigger_e2e() {
     local trigger_name="$1"
     local trigger_cmd="$2"
@@ -189,82 +217,103 @@ trigger_e2e() {
     echo "  Trying: $trigger_name"
 
     local output_file="${TEMP_DIR}/trigger_${trigger_name// /_}.log"
-    local start_time=$(date +%s)
+    local start_time end_time elapsed
 
-    # Run the trigger command, capture output
-    eval "$trigger_cmd" > "$output_file" 2>&1 &
+    # Run command in background
+    (
+        eval "$trigger_cmd" > "$output_file" 2>&1
+    ) &
     local pid=$!
-    local timeout=45
 
-    # Wait for completion with timeout
+    # Wait with timeout (45 seconds)
+    start_time=$(date +%s)
     while kill -0 $pid 2>/dev/null; do
-        local elapsed=$(($(date +%s) - start_time))
-        if [ $elapsed -gt $timeout ]; then
+        end_time=$(date +%s)
+        elapsed=$((end_time - start_time))
+        if [ $elapsed -gt 45 ]; then
             kill $pid 2>/dev/null || true
-            echo "    TIMEOUT after ${timeout}s" >> "$output_file"
+            # Reap process without breaking set -e flow
+            set +e
+            wait $pid 2>/dev/null
+            set -e
+            echo "    TIMEOUT after 45s" >> "$output_file"
             return 1
         fi
         sleep 1
     done
 
+    # wait can return non-zero (e.g. SIGTERM=143); don't let set -e abort script
+    set +e
     wait $pid
     local exit_code=$?
+    set -e
 
     if [ $exit_code -eq 0 ]; then
         echo "    SUCCESS: $trigger_name"
         return 0
     else
         echo "    FAILED: $trigger_name (exit $exit_code)"
-        echo "    Last 10 lines of output:"
-        tail -10 "$output_file" | sed 's/^/      /'
+        echo "    Last 30 lines of output:"
+        tail -30 "$output_file" | sed 's/^/      /'
         return 1
     fi
 }
 
-# Try multiple trigger strategies
+# Try triggers in order with capability probing
 try_triggers() {
     local triggered=false
-    local strategy_num=0
 
-    # Strategy 1: openclaw agent --agent main -m "..."
-    strategy_num=$((strategy_num + 1))
-    if ! $triggered; then
+    # Strategy 1: openclaw agent --agent main (probed)
+    if ! $triggered && has_subcmd openclaw agent; then
         if trigger_e2e "agent-main" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout 30"; then
             triggered=true
             echo "  -> Trigger succeeded: agent --agent main"
         fi
     fi
 
-    # Strategy 2: openclaw agent -m "..." (let it auto-route)
-    if ! $triggered; then
-        if trigger_e2e "agent-auto" "openclaw agent -m 'memory-fabric e2e test' --timeout 30"; then
-            triggered=true
-            echo "  -> Trigger succeeded: agent (auto)"
+    # Strategy 2: openclaw message send (probed)
+    if ! $triggered && has_nested openclaw message send; then
+        # Get a target - try telegram first
+        local target=""
+        if openclaw directory self 2>/dev/null | grep -q "telegram"; then
+            # Try to get own telegram ID
+            target="self"
+        fi
+        if [ -n "$target" ]; then
+            if trigger_e2e "message-send" "openclaw message send --channel telegram --target '$target' --message 'memory-fabric e2e test'"; then
+                triggered=true
+                echo "  -> Trigger succeeded: message send"
+            fi
         fi
     fi
 
-    # Strategy 3: openclaw system event --expect-final
-    if ! $triggered; then
+    # Strategy 3: openclaw system event (probed)
+    if ! $triggered && has_subcmd openclaw system event; then
         if trigger_e2e "system-event" "openclaw system event --text 'memory-fabric e2e test' --expect-final --timeout 30"; then
             triggered=true
             echo "  -> Trigger succeeded: system event"
         fi
     fi
 
-    # Strategy 4: Try to get active session and send to it
-    if ! $triggered; then
+    # Strategy 4: openclaw sessions send (probed)
+    if ! $triggered && has_subcmd openclaw sessions send; then
         local sessions_output
         sessions_output=$(openclaw sessions list --timeout 5000 2>&1 || true)
-        if echo "$sessions_output" | grep -q "telegram"; then
-            # Try to get the most recent session
-            local session_id
-            session_id=$(echo "$sessions_output" | grep -oE 'telegram:[a-zA-Z0-9_-]+' | head -1 | cut -d: -f2)
-            if [ -n "$session_id" ]; then
-                if trigger_e2e "session-send" "openclaw sessions send --session-id '$session_id' 'memory-fabric e2e test' --timeout 30"; then
-                    triggered=true
-                    echo "  -> Trigger succeeded: session send"
-                fi
+        local session_id
+        session_id=$(echo "$sessions_output" | grep -oE 'telegram:[a-zA-Z0-9_-]+' | head -1 | cut -d: -f2)
+        if [ -n "$session_id" ]; then
+            if trigger_e2e "sessions-send" "openclaw sessions send --session-id '$session_id' 'memory-fabric e2e test' --timeout 30"; then
+                triggered=true
+                echo "  -> Trigger succeeded: sessions send"
             fi
+        fi
+    fi
+
+    # Strategy 5: openclaw agent (auto, fallback)
+    if ! $triggered && has_subcmd openclaw agent; then
+        if trigger_e2e "agent-auto" "openclaw agent -m 'memory-fabric e2e test' --timeout 30"; then
+            triggered=true
+            echo "  -> Trigger succeeded: agent (auto)"
         fi
     fi
 
@@ -278,94 +327,69 @@ try_triggers() {
 if [ "$GATEWAY_RUNNING" = "true" ]; then
     echo "Gateway detected running, attempting E2E test..."
 
-    # Check for existing artifacts FIRST (before triggering)
-    echo "Checking for existing artifacts..."
-    existing_artifacts=$(check_artifacts)
-    existing_context=$(echo "$existing_artifacts" | cut -d: -f1)
-    existing_tools=$(echo "$existing_artifacts" | cut -d: -f2)
+    # Always backup existing artifacts before testing
+    echo "Preparing memory fabric directory..."
+    backup_artifacts
 
-    if [ "$existing_context" = "true" ] && [ "$existing_tools" = "true" ]; then
-        echo "Artifacts already exist from previous run:"
-        shopt -s nullglob
-        for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${WORKSPACE_DIR}"/.memory_fabric; do
-            if [ -f "${check_dir}/context_pack.md" ]; then
-                echo "  - context_pack.md: ${check_dir}/context_pack.md"
-            fi
-            if [ -f "${check_dir}/TOOLS.md" ]; then
-                echo "  - TOOLS.md: ${check_dir}/TOOLS.md"
-            fi
-        done
-        shopt -u nullglob
-        echo "Using existing artifacts (skipping trigger to preserve state)"
-        echo "✅ E2E OK - Context files verified (existing)"
-    else
-        # Try triggers to create new artifacts
-        echo "Attempting to trigger E2E events..."
+    # Always attempt triggers
+    echo "Attempting E2E triggers..."
 
-        if try_triggers; then
-            # Wait briefly for artifacts to be created
-            echo "Waiting for artifacts to be created..."
-            sleep 3
+    if try_triggers; then
+        # Wait for artifacts to be created
+        echo "Waiting for artifacts to be created..."
+        sleep 3
 
-            # Check for artifacts after trigger
-            new_artifacts=$(check_artifacts)
-            new_context=$(echo "$new_artifacts" | cut -d: -f1)
-            new_tools=$(echo "$new_artifacts" | cut -d: -f2)
+        # Check for artifacts
+        artifacts=$(check_artifacts)
+        has_context=$(echo "$artifacts" | cut -d: -f1)
+        has_tools=$(echo "$artifacts" | cut -d: -f2)
 
-            if [ "$new_context" = "true" ] && [ "$new_tools" = "true" ]; then
-                echo "Artifacts created successfully:"
-                shopt -s nullglob
-                for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${WORKSPACE_DIR}"/.memory_fabric; do
-                    if [ -f "${check_dir}/context_pack.md" ]; then
-                        echo "  - context_pack.md: ${check_dir}/context_pack.md"
-                    fi
-                    if [ -f "${check_dir}/TOOLS.md" ]; then
-                        echo "  - TOOLS.md: ${check_dir}/TOOLS.md"
-                    fi
-                done
-                shopt -u nullglob
-                echo "✅ E2E OK - Context files verified"
-            else
-                echo "Trigger succeeded but artifacts missing:"
-                echo "  context_pack.md: $new_context"
-                echo "  TOOLS.md: $new_tools"
-                echo ""
-                echo "This indicates hook didn't run or workspace mismatch."
-                echo "========================================"
-                echo "❌ Doctor FAIL - Trigger succeeded but artifacts missing"
-                echo "========================================"
-                exit 1
-            fi
+        if [ "$has_context" = "true" ] && [ "$has_tools" = "true" ]; then
+            echo "Artifacts created successfully:"
+            echo "  - context_pack.md: ${MF_DIR}/context_pack.md"
+            echo "  - TOOLS.md: ${MF_DIR}/TOOLS.md"
+            echo ""
+            echo "=== Evidence ==="
+            ls -la "${MF_DIR}/"
+            echo ""
+            echo "=== context_pack.md (first 5 lines) ==="
+            head -n 5 "${MF_DIR}/context_pack.md"
+            echo "✅ E2E OK - Context files verified"
         else
-            echo "All trigger strategies failed."
+            echo "Trigger succeeded but artifacts missing:"
+            echo "  context_pack.md: $has_context"
+            echo "  TOOLS.md: $has_tools"
             echo ""
-            echo "Diagnostics:"
-            echo "  - Gateway: running"
-            echo "  - All trigger methods failed"
-            echo ""
-            echo "This could mean:"
-            echo "  1. Agent is not responding"
-            echo "  2. Hook is not being triggered"
-            echo "  3. Workspace mismatch"
-
-            # Check if artifacts exist anyway (maybe from earlier)
-            local final_artifacts
-            final_artifacts=$(check_artifacts)
-            local final_context final_tools
-            final_context=$(echo "$final_artifacts" | cut -d: -f1)
-            final_tools=$(echo "$final_artifacts" | cut -d: -f2)
-
-            if [ "$final_context" = "true" ] && [ "$final_tools" = "true" ]; then
-                echo ""
-                echo "Note: Artifacts exist from previous run, using those."
-                echo "✅ E2E OK - Context files verified (existing)"
-            else
-                echo "========================================"
-                echo "❌ Doctor FAIL - All triggers failed and no artifacts"
-                echo "========================================"
-                exit 1
-            fi
+            echo "This indicates hook didn't run or workspace mismatch."
+            echo "========================================"
+            echo "❌ Doctor FAIL - Trigger succeeded but artifacts missing"
+            echo "========================================"
+            exit 1
         fi
+    else
+        echo "All trigger strategies failed."
+        echo ""
+        echo "Diagnostics:"
+        echo "  - Gateway: running"
+        echo "  - All trigger methods failed"
+        echo ""
+        echo "This could mean:"
+        echo "  1. Agent is not responding"
+        echo "  2. Hook is not being triggered"
+        echo "  3. Workspace mismatch"
+
+        # Check if artifacts exist from backup
+        if [ -n "$BACKUP_DIR" ] && [ -f "${BACKUP_DIR}/context_pack.md" ]; then
+            echo ""
+            echo "Note: Artifacts exist from backup, restoring..."
+            mv "${BACKUP_DIR}/"* "${MF_DIR}/" 2>/dev/null || true
+            rmdir "${BACKUP_DIR}" 2>/dev/null || true
+        fi
+
+        echo "========================================"
+        echo "❌ Doctor FAIL - All triggers failed and no artifacts"
+        echo "========================================"
+        exit 1
     fi
 else
     echo "Gateway not running, E2E skipped"
@@ -377,9 +401,9 @@ fi
 
 echo ""
 if [ "$GATEWAY_RUNNING" = "true" ]; then
-  echo "✅ Doctor PASS - All checks succeeded (including E2E)"
+    echo "✅ Doctor PASS - All checks succeeded (including E2E)"
 else
-  echo "✅ Doctor PASS - All checks succeeded (E2E skipped)"
+    echo "✅ Doctor PASS - All checks succeeded (E2E skipped)"
 fi
 echo "========================================"
 echo ""
