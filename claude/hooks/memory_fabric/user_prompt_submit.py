@@ -31,7 +31,7 @@ def fetch_recent_projects() -> list:
     output, code = run_memory_hub([
         "search",
         "project_snapshot",
-        "--top-k", str(MAX_RECENT_PROJECTS),
+        "--top-k", "50",  # Fetch more to ensure we get newest
         "--project", "global:project_registry",
         "--json"
     ])
@@ -64,19 +64,19 @@ def fetch_recent_projects() -> list:
                 "raw": content  # Use full content for sorting
             })
 
-    # Sort by full content (most recent token number will be last when sorted ascending)
+    # Sort by full content ascending (so newest is last)
     projects.sort(key=lambda x: x.get("raw", ""))
 
-    # Deduplicate by project_id - keep the entry with the latest content (last after sort)
+    # Deduplicate by project_id - keep the LATEST (iterate reversed to get newest)
     seen = {}
     unique = []
-    for p in reversed(projects):  # Process in reverse to keep latest
+    for p in reversed(projects):  # Iterate newest to oldest
         pid = p["project_id"]
         if pid and pid not in seen:
             seen[pid] = True
-            unique.append(p)
+            unique.append(p)  # Keep first occurrence (newest)
 
-    # Reverse back to newest first
+    # Reverse back to get correct order (newest first)
     unique.reverse()
 
     return unique[:MAX_RECENT_PROJECTS]
