@@ -140,7 +140,7 @@ except:
 
   # Run a quick agent turn
   echo "Running test agent turn..."
-  if openclaw agent --local -m "hello" --timeout 30 >/dev/null 2>&1; then
+  if openclaw agent --agent main -m "hello" --timeout 30 >/dev/null 2>&1; then
     echo "Agent turn completed"
   else
     echo "E2E FAIL: agent turn failed"
