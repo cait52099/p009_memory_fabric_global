@@ -49,14 +49,19 @@ def main():
         "cwd": cwd
     })
 
-    # Assemble context from memory hub
-    # Query with the prompt, limited tokens
-    output, code = run_memory_hub([
+    # Build memory-hub assemble command
+    cmd = [
         "assemble",
         user_prompt,
         "--max-tokens", "1200",
         "--json"
-    ])
+    ]
+
+    # If project override detected, add project filter to retrieval
+    if project_override:
+        cmd.extend(["--project", project_id])
+
+    output, code = run_memory_hub(cmd)
 
     if code != 0:
         log_message(f"Error assembling context: {output}", session_id)

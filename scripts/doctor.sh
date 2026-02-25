@@ -66,4 +66,32 @@ except Exception as e:
     sys.exit(1)
 " && echo "OK: No override marker when prompt has no project mention"
 
+echo "==> Hook mock: project override retrieves from project (E2E semantic test)"
+# Step 1: Write a unique memory into project p009_memory_fabric_global
+UNIQUE_TOKEN="OVERRIDE_E2E_TOKEN_$(date +%s)"
+"${WRAPPER}" write "${UNIQUE_TOKEN}" --type note --source "p009_memory_fabric_global" >/dev/null
+echo "Wrote unique token: ${UNIQUE_TOKEN}"
+
+# Step 2: From /tmp, call hook with prompt mentioning the project
+INPUT3='{"hookEventName":"UserPromptSubmit","session_id":"doctor-e2e","cwd":"/tmp","prompt":"status of p009_memory_fabric_global"}'
+OUTPUT3=$(echo "$INPUT3" | "${VENV_PY}" "${HOOK}")
+
+# Step 3: Assert the unique token appears in the retrieved context
+echo "$OUTPUT3" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    ctx = d.get('hookSpecificOutput', {}).get('additionalContext', '')
+    token = '${UNIQUE_TOKEN}'
+    if token in ctx:
+        sys.exit(0)
+    else:
+        print('FAIL: unique token not found in context')
+        print('Context was:', ctx[:500])
+        sys.exit(1)
+except Exception as e:
+    print(f'FAIL: {e}')
+    sys.exit(1)
+" && echo "OK: Project override retrieves from target project (E2E semantic test)"
+
 echo "✅ Doctor PASS"
