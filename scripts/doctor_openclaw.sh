@@ -114,7 +114,7 @@ else
   exit 1
 fi
 
-echo "==> [8/8] E2E Test (optional)"
+echo "==> [8/8] E2E Test"
 # Try to detect if gateway is running
 GATEWAY_RUNNING=false
 if openclaw gateway status --timeout 3000 >/dev/null 2>&1; then
@@ -138,35 +138,43 @@ except:
     print('${OPENCLAW_DIR}/workspace')
 " 2>/dev/null)
 
-  # Create test workspace if needed
-  TEST_WS="${WORKSPACE_DIR}/memory-fabric-e2e-test"
-  mkdir -p "${TEST_WS}/.memory_fabric"
-
   # Run a quick agent turn
   echo "Running test agent turn..."
   if openclaw agent --local -m "hello" --timeout 30 >/dev/null 2>&1; then
     echo "Agent turn completed"
-
-    # Check for context files in the test workspace
-    # Note: The actual location depends on hook implementation
-    # For now, check common locations
-    CONTEXT_FOUND=false
-    for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${TEST_WS}"/.memory_fabric; do
-      if [ -f "${check_dir}/context_pack.md" ] 2>/dev/null; then
-        echo "OK: Found context_pack.md in ${check_dir}"
-        CONTEXT_FOUND=true
-        break
-      fi
-    done
-
-    if [ "$CONTEXT_FOUND" = "true" ]; then
-      echo "✅ E2E PASS - Context files created"
-    else
-      echo "WARN: E2E context files not found (hook may need restart)"
-    fi
   else
-    echo "WARN: Agent turn failed, skipping E2E"
+    echo "E2E FAIL: agent turn failed"
+    echo "========================================"
+    echo "❌ Doctor FAIL - E2E test failed"
+    echo "========================================"
+    exit 1
   fi
+
+  # Check for context files
+  CONTEXT_FOUND=false
+  TOOLS_FOUND=false
+
+  # Check common workspace locations for .memory_fabric
+  for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${WORKSPACE_DIR}"/.memory_fabric; do
+    if [ -f "${check_dir}/context_pack.md" ] 2>/dev/null; then
+      echo "OK: Found context_pack.md in ${check_dir}"
+      CONTEXT_FOUND=true
+    fi
+    if [ -f "${check_dir}/TOOLS.md" ] 2>/dev/null; then
+      echo "OK: Found TOOLS.md in ${check_dir}"
+      TOOLS_FOUND=true
+    fi
+  done
+
+  if [ "$CONTEXT_FOUND" = "false" ]; then
+    echo "E2E FAIL: context_pack.md not found"
+    echo "========================================"
+    echo "❌ Doctor FAIL - E2E artifacts missing"
+    echo "========================================"
+    exit 1
+  fi
+
+  echo "✅ E2E OK - Context files verified"
 else
   echo "E2E skipped (gateway not running)"
   echo "To test E2E manually:"
@@ -176,7 +184,10 @@ else
 fi
 
 echo ""
-echo "========================================"
-echo "✅ Doctor PASS - All checks succeeded"
+if [ "$GATEWAY_RUNNING" = "true" ]; then
+  echo "✅ Doctor PASS - All checks succeeded (including E2E)"
+else
+  echo "✅ Doctor PASS - All checks succeeded (E2E skipped)"
+fi
 echo "========================================"
 echo ""
