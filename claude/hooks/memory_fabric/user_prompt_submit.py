@@ -146,6 +146,20 @@ def main():
     if project_override:
         cmd.extend(["--project", project_id])
 
+    # Optional: Add episode context if enabled
+    episodes_enabled = os.environ.get("MEMORY_FABRIC_EPISODES", "0") == "1"
+    episode_context = ""
+    if episodes_enabled and project_id:
+        episode_cmd = cmd.copy()
+        episode_cmd.append("--with-episodes")
+        ep_output, ep_code = run_memory_hub(episode_cmd)
+        if ep_code == 0:
+            try:
+                ep_result = json.loads(ep_output.strip())
+                episode_context = ep_result.get("content", "")
+            except json.JSONDecodeError:
+                pass
+
     output, code = run_memory_hub(cmd)
 
     if code != 0:
@@ -172,6 +186,12 @@ def main():
     # Add project override marker if applicable
     if project_override:
         context_parts.append(f"<!-- PROJECT_OVERRIDE: {project_id} -->")
+
+    # Add episode context if enabled (behind MEMORY_FABRIC_EPISODES=1)
+    if episode_context:
+        context_parts.append("<!-- EPISODE_CONTEXT -->")
+        context_parts.append(episode_context)
+        context_parts.append("<!-- END_EPISODE_CONTEXT -->")
 
     # Add memories
     memories = result.get("memories", [])
