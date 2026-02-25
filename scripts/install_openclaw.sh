@@ -6,8 +6,34 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OPENCLAW_DIR="${HOME}/.openclaw"
 HOOK_SRC="${ROOT}/openclaw/hooks/memory-fabric-autowire"
-CONFIG="${OPENCLAW_DIR}/openclaw.json"
 HOOK_NAME="memory-fabric-autowire"
+
+# Helper: Find OpenClaw config file (in order of preference)
+find_config() {
+    local config_candidates=(
+        "${OPENCLAW_DIR}/config.json"
+        "${OPENCLAW_DIR}/openclaw.json"
+        "${OPENCLAW_DIR}/clawdbot.json"
+    )
+
+    for cfg in "${config_candidates[@]}"; do
+        if [ -f "$cfg" ]; then
+            echo "$cfg"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+CONFIG=$(find_config) || {
+    echo "ERROR: No OpenClaw config found in ${OPENCLAW_DIR}"
+    echo "Tried: config.json, openclaw.json, clawdbot.json"
+    echo "Please ensure OpenClaw is installed and configured."
+    exit 1
+}
+
+echo "==> Using config: ${CONFIG}"
 
 echo "==> [1/5] Check OpenClaw installation"
 if [ ! -d "${OPENCLAW_DIR}" ]; then
@@ -55,8 +81,6 @@ echo "==> [5/5] Ensure config has hooks.internal.enabled=true and hook enabled"
 # Ensure hooks.internal.enabled=true in config
 python3 - <<PY
 import json
-import os
-from pathlib import Path
 
 config_path = "${CONFIG}"
 hook_name = "${HOOK_NAME}"
