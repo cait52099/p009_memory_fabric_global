@@ -129,11 +129,16 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
 import json
 try:
     c = json.load(open('${CONFIG}'))
-    ws = c.get('workspace') or c.get('workspaceDir') or c.get('defaultWorkspace')
+    # Check agents.defaults.workspace first (where it's actually defined)
+    ws = c.get('agents',{}).get('defaults',{}).get('workspace')
     if ws:
         print(ws)
     else:
-        print('${OPENCLAW_DIR}/workspace')
+        ws = c.get('workspace') or c.get('workspaceDir') or c.get('defaultWorkspace')
+        if ws:
+            print(ws)
+        else:
+            print('${OPENCLAW_DIR}/workspace')
 except:
     print('${OPENCLAW_DIR}/workspace')
 " 2>/dev/null)
@@ -155,6 +160,8 @@ except:
   TOOLS_FOUND=false
 
   # Check common workspace locations for .memory_fabric
+  # Use nullglob to avoid errors when no matches
+  shopt -s nullglob
   for check_dir in "${WORKSPACE_DIR}"/*/.memory_fabric "${WORKSPACE_DIR}"/.memory_fabric; do
     if [ -f "${check_dir}/context_pack.md" ] 2>/dev/null; then
       echo "OK: Found context_pack.md in ${check_dir}"
@@ -165,6 +172,7 @@ except:
       TOOLS_FOUND=true
     fi
   done
+  shopt -u nullglob
 
   if [ "$CONTEXT_FOUND" = "false" ]; then
     echo "E2E FAIL: context_pack.md not found"

@@ -1,3 +1,12 @@
+---
+name: memory-fabric-autowire
+description: "Injects Memory Fabric context into OpenClaw agent sessions"
+metadata:
+  openclaw:
+    emoji: "🔗"
+    events: ["message:received", "agent:bootstrap", "message:sent", "command:stop"]
+---
+
 # Memory Fabric Autowire Hook
 
 Injects Memory Fabric context into OpenClaw agent sessions.
