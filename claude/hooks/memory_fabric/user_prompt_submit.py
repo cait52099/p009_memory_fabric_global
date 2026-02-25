@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from _util import (
     get_project_id,
+    extract_project_from_prompt,
     get_session_id,
     run_memory_hub,
     read_hook_input,
@@ -30,8 +31,16 @@ def main():
         # No prompt to process
         sys.exit(0)
 
-    project_id = get_project_id(cwd)
-    log_message(f"UserPromptSubmit: project={project_id}, session={session_id}", session_id)
+    # Project Resolver: Check if prompt mentions a known project
+    project_override = extract_project_from_prompt(user_prompt)
+
+    # Use override if found, otherwise use cwd-based detection
+    if project_override:
+        project_id = project_override
+        log_message(f"UserPromptSubmit: project={project_id} (override), session={session_id}", session_id)
+    else:
+        project_id = get_project_id(cwd)
+        log_message(f"UserPromptSubmit: project={project_id}, session={session_id}", session_id)
 
     # Cache the prompt for later write-back
     write_cache(session_id, {
@@ -54,7 +63,8 @@ def main():
         sys.exit(0)
 
     try:
-        result = json.loads(output)
+        # memory-hub may output leading whitespace, strip it
+        result = json.loads(output.strip())
     except json.JSONDecodeError:
         log_message(f"Failed to parse JSON: {output}", session_id)
         sys.exit(0)
@@ -62,6 +72,10 @@ def main():
     # Build context from result
     context_parts = []
     context_parts.append("<!-- MEMORY_FABRIC_CONTEXT -->")
+
+    # Add project override marker if applicable
+    if project_override:
+        context_parts.append(f"<!-- PROJECT_OVERRIDE: {project_id} -->")
 
     # Add memories
     memories = result.get("memories", [])
