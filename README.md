@@ -1,6 +1,58 @@
 # P009 Memory Fabric Global
 
-A distributable, **global and invisible** integration that makes **Memory Fabric** the authoritative memory layer for Claude Code.
+A distributable, **global and invisible** integration that makes **Memory Fabric** the authoritative memory layer for Claude Code and OpenClaw.
+
+## Why It Matters
+
+- **Continuity**: Your AI remembers what you worked on last week, not just this session
+- **Context injection**: Relevant memories automatically appear before every response
+- **Episode tracking**: Records task intents and outcomes so the system learns from success/failure patterns
+
+## Quickstart (Claude Code)
+
+```bash
+# 1. Install
+git clone https://github.com/cait52099/p009_memory_fabric_global.git
+cd p009_memory_fabric_global
+bash scripts/install.sh
+
+# 2. Validate
+bash scripts/doctor.sh
+
+# 3. Use - it works automatically
+# Just start using Claude Code - memories are injected before every response
+```
+
+## Quickstart (OpenClaw)
+
+```bash
+# 1. Install OpenClaw gateway
+npm install -g @anthropic-ai/openclaw
+openclaw install
+
+# 2. Install the episode sync hook pack
+bash scripts/install_openclaw.sh
+
+# 3. Use - episodes auto-record at session end
+claude --agent main
+```
+
+## How It Learns
+
+- **Best Known Path**: Semantic episode matching finds similar past tasks and injects their context
+- **Pitfalls**: Error signatures (401, 403, timeout) trigger episode injection to avoid repeated mistakes
+
+## Privacy & Redaction
+
+All free-text fields are redacted before storage:
+- API keys (`sk-...`)
+- Tokens (`ghp_...`, `gho_...`)
+- Email addresses
+- AWS keys (`AKIA...`)
+
+Episode records use deterministic P008 redaction - nothing sensitive leaves your machine.
+
+---
 
 ## What It Does (Globally)
 
