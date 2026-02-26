@@ -159,4 +159,13 @@ except Exception as e:
 [ "$CHECK_E2E" = "PASS" ] || fail "$CHECK_E2E"
 ok "Project override retrieves from target project (E2E semantic test)"
 
+# Optional Episode demo (fail-fast) — only when explicitly enabled
+if [[ "${MEMORY_FABRIC_EPISODES_DEMO:-0}" == "1" ]]; then
+  ok "Episode demo enabled (MEMORY_FABRIC_EPISODES_DEMO=1) — running scripts/episode_demo.sh"
+  bash "${ROOT}/scripts/episode_demo.sh"
+  ok "Episode demo PASS"
+else
+  ok "Episode demo skipped (set MEMORY_FABRIC_EPISODES_DEMO=1 to run)"
+fi
+
 echo "✅ Doctor PASS"

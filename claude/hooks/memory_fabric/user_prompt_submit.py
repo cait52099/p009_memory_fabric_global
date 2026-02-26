@@ -156,7 +156,7 @@ def main():
         if ep_code == 0:
             try:
                 ep_result = json.loads(ep_output.strip())
-                episode_context = ep_result.get("content", "")
+                episode_context = ep_result.get("episode_context", "")
             except json.JSONDecodeError:
                 pass
 
