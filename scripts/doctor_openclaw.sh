@@ -56,28 +56,6 @@ HAS_AGENT=false
 HAS_SESSIONS_LIST=false
 HAS_SESSIONS_SEND=false
 
-# Legacy helpers (kept for compatibility)
-has_subcmd() {
-    local cmd="$1"
-    shift
-    local subcmd="$1"
-    # Try: openclaw agent --help (if subcmd is first arg)
-    if "$cmd" "$subcmd" --help &>/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
-has_nested() {
-    local cmd="$1"
-    local subcmd="$2"
-    # Try: openclaw message send --help
-    if "$cmd" "$subcmd" --help &>/dev/null; then
-        return 0
-    fi
-    return 1
-}
-
 CONFIG=$(find_config) || {
     echo "ERROR: No OpenClaw config found in ${OPENCLAW_DIR}"
     exit 1
@@ -697,12 +675,10 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
             else
                 # Else: search recent hook.log under workspace root (within 120s)
                 echo "Searching for recent hook.log within 120s..."
-                local recent_hook=""
+                recent_hook=""
                 for candidate in "${HOME}/clawd" "${HOME}" "${OPENCLAW_DIR}/workspace"; do
                     if [ -f "${candidate}/.memory_fabric/hook.log" ]; then
-                        local mtime
                         mtime=$(stat -f%m "${candidate}/.memory_fabric/hook.log" 2>/dev/null || stat -c %Y "${candidate}/.memory_fabric/hook.log" 2>/dev/null || echo "0")
-                        local now age
                         now=$(date +%s)
                         age=$((now - mtime))
                         if [ "$age" -lt 120 ]; then
