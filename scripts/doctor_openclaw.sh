@@ -245,8 +245,8 @@ except:
         WORKSPACE_DIR="$recent_log"
         WORKSPACE_REASON="source=fallback: recent hook.log within 60s"
     else
-        WORKSPACE_DIR="${HOME}/clawd"
-        WORKSPACE_REASON="source=fallback: default to ~/clawd"
+        WORKSPACE_DIR=""
+        WORKSPACE_REASON="source=fallback: unresolved"
     fi
 }
 
@@ -309,7 +309,7 @@ check_artifacts() {
 }
 
 # Try to detect if gateway is running
-if openclaw gateway status --timeout 5000 >/dev/null 2>&1; then
+if openclaw gateway status --timeout "$GATEWAY_TIMEOUT_MS" >/dev/null 2>&1; then
     GATEWAY_RUNNING=true
 fi
 
@@ -366,61 +366,137 @@ trigger_e2e() {
     fi
 }
 
+# Detect whether openclaw command supports a --timeout flag
+supports_timeout_flag() {
+    local help_out
+    help_out=$("$@" --help 2>&1 || true)
+    echo "$help_out" | grep -q -- '--timeout'
+}
+
+# Build command with timeout only when supported
+with_timeout_arg() {
+    local base_cmd="$1"
+    local timeout_ms="$2"
+    if eval "$base_cmd --help" 2>/dev/null | grep -q -- '--timeout'; then
+        echo "$base_cmd --timeout ${timeout_ms}"
+    else
+        echo "$base_cmd"
+    fi
+}
+
+# Find first usable session id from status/sessions outputs
+pick_session_id() {
+    local sid=""
+    local out=""
+
+    # 1) Try status output hints
+    out=$(openclaw status --all --deep 2>&1 || true)
+    sid=$(echo "$out" | grep -Eo '(session[-_ ]?id|sessionId)[:= ]+[A-Za-z0-9:_-]+' | head -1 | sed -E 's/.*[:= ]+//' )
+
+    # 2) Parse main agent session store directly (most reliable)
+    if [ -z "$sid" ]; then
+        sid=$(python3 - <<'PY2'
+import json, os
+p=os.path.expanduser('~/.openclaw/agents/main/sessions/sessions.json')
+try:
+    data=json.load(open(p))
+    if isinstance(data, dict):
+        items=data.get('sessions') or data.get('items') or []
+    else:
+        items=data or []
+    if isinstance(items, dict):
+        items=list(items.values())
+    if items:
+        # prefer active/most recent
+        items=sorted(items, key=lambda x: x.get('updatedAt') or x.get('lastActivityAt') or '', reverse=True)
+        k=items[0].get('sessionKey') or items[0].get('id') or items[0].get('sessionId') or ''
+        print(k)
+except Exception:
+    pass
+PY2
+)
+    fi
+
+    echo "$sid"
+}
+
+# Retry wrapper for transient gateway/targeting failures
+trigger_with_retry() {
+    local name="$1"
+    local cmd="$2"
+    local attempts=0
+    local max_attempts=3
+    local delay=1
+
+    while [ "$attempts" -lt "$max_attempts" ]; do
+        attempts=$((attempts + 1))
+        if trigger_e2e "${name}-try${attempts}" "$cmd"; then
+            return 0
+        fi
+
+        local logf="${TEMP_DIR}/trigger_${name// /_}-try${attempts}.log"
+        if [ -f "$logf" ] && grep -Eq '(gateway timeout after [0-9]+ms|Pass --to|--session-id|--agent)' "$logf"; then
+            if [ "$attempts" -lt "$max_attempts" ]; then
+                echo "    RETRY(${attempts}/${max_attempts}) after ${delay}s: transient gateway/targeting failure"
+                sleep "$delay"
+                delay=$((delay * 2))
+                continue
+            fi
+        fi
+
+        # non-transient failure: no need to keep retrying
+        if [ "$attempts" -lt "$max_attempts" ]; then
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+    done
+
+    return 1
+}
+
 # Try triggers in order with capability probing
 try_triggers() {
     local triggered=false
 
-    # Strategy 1: openclaw agent --agent main (probed)
+        # Strategy 1: openclaw agent --agent main (primary)
     if ! $triggered && has_subcmd openclaw agent; then
-        if trigger_e2e "agent-main" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
+        local cmd="openclaw agent --agent main -m 'memory-fabric e2e test'"
+        if supports_timeout_flag openclaw agent; then
+            cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
+        fi
+        if trigger_with_retry "agent-main" "$cmd"; then
             triggered=true
             echo "  -> Trigger succeeded: agent --agent main"
         fi
     fi
 
-    # Strategy 2: openclaw message send (probed)
-    if ! $triggered && has_nested openclaw message send; then
-        # Get a target - try telegram first
-        local target=""
-        if openclaw directory self 2>/dev/null | grep -q "telegram"; then
-            # Try to get own telegram ID
-            target="self"
-        fi
-        if [ -n "$target" ]; then
-            if trigger_e2e "message-send" "openclaw message send --channel telegram --target '$target' --message 'memory-fabric e2e test'"; then
-                triggered=true
-                echo "  -> Trigger succeeded: message send"
+    # Strategy 2: openclaw agent --session-id <id> (explicit target fallback)
+    if ! $triggered && has_subcmd openclaw agent; then
+        local session_id=""
+        session_id=$(pick_session_id)
+        if [ -n "$session_id" ]; then
+            local cmd="openclaw agent --session-id '${session_id}' -m 'memory-fabric e2e test'"
+            if supports_timeout_flag openclaw agent; then
+                cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
             fi
+            if trigger_with_retry "agent-session" "$cmd"; then
+                triggered=true
+                echo "  -> Trigger succeeded: agent --session-id ${session_id}"
+            fi
+        else
+            echo "  -> No session-id discovered from status/session store"
         fi
     fi
 
-    # Strategy 3: openclaw system event (probed)
-    if ! $triggered && has_subcmd openclaw system event; then
-        if trigger_e2e "system-event" "openclaw system event --text 'memory-fabric e2e test' --expect-final --timeout $AGENT_TIMEOUT_MS"; then
+    # Strategy 3: openclaw system event (last resort)
+    if ! $triggered && has_subcmd openclaw system; then
+        local cmd="openclaw system event --text 'memory-fabric e2e test' --expect-final"
+        if supports_timeout_flag openclaw system event; then
+            cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
+        fi
+        if trigger_with_retry "system-event" "$cmd"; then
             triggered=true
             echo "  -> Trigger succeeded: system event"
-        fi
-    fi
-
-    # Strategy 4: openclaw sessions send (probed)
-    if ! $triggered && has_subcmd openclaw sessions send; then
-        local sessions_output
-        sessions_output=$(openclaw sessions list --timeout 5000 2>&1 || true)
-        local session_id
-        session_id=$(echo "$sessions_output" | grep -oE 'telegram:[a-zA-Z0-9_-]+' | head -1 | cut -d: -f2)
-        if [ -n "$session_id" ]; then
-            if trigger_e2e "sessions-send" "openclaw sessions send --session-id '$session_id' 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
-                triggered=true
-                echo "  -> Trigger succeeded: sessions send"
-            fi
-        fi
-    fi
-
-    # Strategy 5: openclaw agent (auto, fallback)
-    if ! $triggered && has_subcmd openclaw agent; then
-        if trigger_e2e "agent-auto" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
-            triggered=true
-            echo "  -> Trigger succeeded: agent (auto)"
         fi
     fi
 
