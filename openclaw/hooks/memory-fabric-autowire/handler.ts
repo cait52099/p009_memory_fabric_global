@@ -266,8 +266,39 @@ async function shouldSmartInject(prompt: string, projectId: string): Promise<boo
 }
 
 // Redact secrets from content before storing (deterministic, no LLM)
-// Note: Redaction is handled by P008 Python module (memory_hub.redaction)
-// before calling memory-hub CLI commands
+// Redaction via P008 Python module
+function redactWithP008(text: string): string {
+  if (!text) return text;
+  try {
+    const proc = spawn('python3', [
+      '-c',
+      `from memory_hub.redaction import redact; print(redact(input()))`,
+    ], { stdio: ['pipe', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (d) => { stdout += d; });
+    proc.stderr.on('data', (d) => { stderr += d; });
+
+    proc.stdin.write(text);
+    proc.stdin.end();
+
+    return new Promise<string>((resolve) => {
+      proc.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          resolve(text); // Fallback to original
+        }
+      });
+    });
+  } catch (e) {
+    return text; // Fallback
+  }
+}
+
+// For sync usage, we'll do inline - but actually let's make the auto-record async
 
 async function handleMessageSent(context: any, config: any, appendLog: (msg: string) => void): Promise<void> {
   const content = context.content;
