@@ -11,9 +11,14 @@ TEMP_DIR="/tmp/openclaw-doctor-$$"
 mkdir -p "$TEMP_DIR"
 trap "rm -rf $TEMP_DIR" EXIT
 
+# Timeout settings (can override via env)
+GATEWAY_TIMEOUT_MS="${GATEWAY_TIMEOUT_MS:-5000}"
+AGENT_TIMEOUT_MS="${AGENT_TIMEOUT_MS:-30000}"
+
 # Global state
 GATEWAY_RUNNING=false
 WORKSPACE_DIR=""
+WORKSPACE_REASON=""
 BACKUP_DIR=""
 artifacts=""
 has_context=""
@@ -247,6 +252,26 @@ except:
 
 # Initialize
 resolve_workspace
+
+# Guard: workspace must be non-empty
+if [ -z "$WORKSPACE_DIR" ]; then
+    echo "FAIL: Workspace directory resolved to empty"
+    echo "Config checked: ${CONFIG}"
+    echo "Keys checked: agents.defaults.workspace, workspace, workspaceDir, defaultWorkspace"
+    echo "========================================"
+    echo "❌ Doctor FAIL - Empty workspace"
+    exit 1
+fi
+
+# Guard: workspace must be valid directory (not root)
+if [ "$WORKSPACE_DIR" = "/" ] || [ -z "$WORKSPACE_DIR" ]; then
+    echo "FAIL: Invalid workspace: '$WORKSPACE_DIR'"
+    echo "Cannot use root directory or empty path"
+    echo "========================================"
+    echo "❌ Doctor FAIL - Invalid workspace"
+    exit 1
+fi
+
 echo "Using workspace: ${WORKSPACE_DIR}"
 echo "Workspace reason: ${WORKSPACE_REASON}"
 
@@ -261,7 +286,9 @@ backup_artifacts() {
     if [ -f "${MF_DIR}/context_pack.md" ] || [ -f "${MF_DIR}/TOOLS.md" ] || [ -f "${MF_DIR}/hook.log" ]; then
         BACKUP_DIR="${MF_DIR}/.doctor_backup_$(date +%s)"
         mkdir -p "$BACKUP_DIR"
-        mv "${MF_DIR}/context_pack.md" "${MF_DIR}/TOOLS.md" "${MF_DIR}/hook.log" "$BACKUP_DIR/" 2>/dev/null || true
+        # Move artifacts that affect pass/fail; keep hook.log in place so new events can append
+        mv "${MF_DIR}/context_pack.md" "${MF_DIR}/TOOLS.md" "$BACKUP_DIR/" 2>/dev/null || true
+        cp "${MF_DIR}/hook.log" "$BACKUP_DIR/" 2>/dev/null || true
         echo "Backed up existing artifacts to: $BACKUP_DIR"
     fi
 }
@@ -282,7 +309,7 @@ check_artifacts() {
 }
 
 # Try to detect if gateway is running
-if openclaw gateway status --timeout 3000 >/dev/null 2>&1; then
+if openclaw gateway status --timeout 5000 >/dev/null 2>&1; then
     GATEWAY_RUNNING=true
 fi
 
@@ -290,6 +317,9 @@ fi
 trigger_e2e() {
     local trigger_name="$1"
     local trigger_cmd="$2"
+
+    # Ensure timeout variables are set
+    local timeout_ms="${AGENT_TIMEOUT_MS:-30000}"
 
     echo "  Trying: $trigger_name"
 
@@ -342,7 +372,7 @@ try_triggers() {
 
     # Strategy 1: openclaw agent --agent main (probed)
     if ! $triggered && has_subcmd openclaw agent; then
-        if trigger_e2e "agent-main" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout 30"; then
+        if trigger_e2e "agent-main" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
             triggered=true
             echo "  -> Trigger succeeded: agent --agent main"
         fi
@@ -366,7 +396,7 @@ try_triggers() {
 
     # Strategy 3: openclaw system event (probed)
     if ! $triggered && has_subcmd openclaw system event; then
-        if trigger_e2e "system-event" "openclaw system event --text 'memory-fabric e2e test' --expect-final --timeout 30"; then
+        if trigger_e2e "system-event" "openclaw system event --text 'memory-fabric e2e test' --expect-final --timeout $AGENT_TIMEOUT_MS"; then
             triggered=true
             echo "  -> Trigger succeeded: system event"
         fi
@@ -379,7 +409,7 @@ try_triggers() {
         local session_id
         session_id=$(echo "$sessions_output" | grep -oE 'telegram:[a-zA-Z0-9_-]+' | head -1 | cut -d: -f2)
         if [ -n "$session_id" ]; then
-            if trigger_e2e "sessions-send" "openclaw sessions send --session-id '$session_id' 'memory-fabric e2e test' --timeout 30"; then
+            if trigger_e2e "sessions-send" "openclaw sessions send --session-id '$session_id' 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
                 triggered=true
                 echo "  -> Trigger succeeded: sessions send"
             fi
@@ -388,7 +418,7 @@ try_triggers() {
 
     # Strategy 5: openclaw agent (auto, fallback)
     if ! $triggered && has_subcmd openclaw agent; then
-        if trigger_e2e "agent-auto" "openclaw agent -m 'memory-fabric e2e test' --timeout 30"; then
+        if trigger_e2e "agent-auto" "openclaw agent --agent main -m 'memory-fabric e2e test' --timeout $AGENT_TIMEOUT_MS"; then
             triggered=true
             echo "  -> Trigger succeeded: agent (auto)"
         fi
@@ -407,33 +437,48 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
     # Always backup existing artifacts before testing
     echo "Preparing memory fabric directory..."
     backup_artifacts
+    mkdir -p "$MF_DIR"
 
     # Always attempt triggers
     echo "Attempting E2E triggers..."
 
     if try_triggers; then
-        # Wait for artifacts to be created
+        # Wait for artifacts to be created (poll up to 20s)
         echo "Waiting for artifacts to be created..."
-        sleep 3
+        for _ in $(seq 1 10); do
+            sleep 2
+            artifacts=$(check_artifacts)
+            has_context=$(echo "$artifacts" | cut -d: -f1)
+            has_tools=$(echo "$artifacts" | cut -d: -f2)
+            if [ "$has_context" = "true" ] && [ "$has_tools" = "true" ]; then
+                break
+            fi
+        done
 
-        # Check for artifacts
-        artifacts=$(check_artifacts)
-        has_context=$(echo "$artifacts" | cut -d: -f1)
-        has_tools=$(echo "$artifacts" | cut -d: -f2)
-
-        # Fallback: if artifacts missing, check recent hook.log within 60s
+        # If artifacts missing, do one strict recovery attempt with agent trigger,
+        # then re-check and workspace re-evaluation.
         if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
-            echo "Artifacts missing in ${WORKSPACE_DIR}, checking for recent hook.log..."
+            echo "Artifacts missing in ${WORKSPACE_DIR}, running one recovery trigger (agent-auto)..."
+            if has_subcmd openclaw agent; then
+                trigger_e2e "agent-recovery" "openclaw agent --agent main -m 'memory-fabric artifact recovery' --timeout ${AGENT_TIMEOUT_MS:-30000}" || true
+                sleep 3
+                artifacts=$(check_artifacts)
+                has_context=$(echo "$artifacts" | cut -d: -f1)
+                has_tools=$(echo "$artifacts" | cut -d: -f2)
+            fi
+        fi
 
-            local fallback_ws=""
-            local fallback_mtime=0
+        # Fallback: if still missing, check recent hook.log within 60s
+        if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
+            echo "Artifacts still missing in ${WORKSPACE_DIR}, checking for recent hook.log..."
+
+            fallback_ws=""
+            fallback_mtime=0
             for candidate in "${HOME}/clawd" "${HOME}" "${OPENCLAW_DIR}/workspace"; do
                 if [ -f "${candidate}/.memory_fabric/hook.log" ]; then
-                    local mtime
                     mtime=$(stat -f%m "${candidate}/.memory_fabric/hook.log" 2>/dev/null || stat -c %Y "${candidate}/.memory_fabric/hook.log" 2>/dev/null || echo "0")
-                    local now
                     now=$(date +%s)
-                    local age=$((now - mtime))
+                    age=$((now - mtime))
 
                     if [ -z "$fallback_ws" ] || [ "$mtime" -gt "$fallback_mtime" ]; then
                         if [ "$age" -lt 60 ]; then
@@ -453,6 +498,14 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
                 has_context=$(echo "$artifacts" | cut -d: -f1)
                 has_tools=$(echo "$artifacts" | cut -d: -f2)
             fi
+        fi
+
+        # Final grace re-check (hooks can be slightly delayed)
+        if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
+            sleep 5
+            artifacts=$(check_artifacts)
+            has_context=$(echo "$artifacts" | cut -d: -f1)
+            has_tools=$(echo "$artifacts" | cut -d: -f2)
         fi
 
         if [ "$has_context" = "true" ] && [ "$has_tools" = "true" ]; then
@@ -525,12 +578,12 @@ if [[ "${EPISODES_AUTO_INJECT:-smart}" == "smart" ]] && [ "$GATEWAY_RUNNING" = "
         --step "doctor smart test" >/dev/null 2>&1 || true
     echo "Recorded test episode: ${SMART_TOKEN}"
 
-    sleep 2
+    sleep 3
 
     # Step 2: Trigger message should produce context (strict check)
     # Note: SMART injection is project-specific; verify hook ran by checking context exists
-    if openclaw agent --agent main -m "fix openclaw doctor e2e strict" --timeout 30 >/dev/null 2>&1; then
-        sleep 2
+    if openclaw agent --agent main -m "fix openclaw doctor e2e strict" --timeout $AGENT_TIMEOUT_MS >/dev/null 2>&1; then
+        sleep 3
 
         # Check that context_pack was created/updated (proves hook ran)
         if [ -f "${MF_DIR}/context_pack.md" ]; then
@@ -559,8 +612,8 @@ if [[ "${EPISODES_AUTO_INJECT:-smart}" == "smart" ]] && [ "$GATEWAY_RUNNING" = "
     fi
 
     # Step 3: Generic message should NOT inject episode context (strict check)
-    if openclaw agent --agent main -m "hello how are you" --timeout 30 >/dev/null 2>&1; then
-        sleep 2
+    if openclaw agent --agent main -m "hello how are you" --timeout $AGENT_TIMEOUT_MS >/dev/null 2>&1; then
+        sleep 3
 
         if [ -f "${MF_DIR}/context_pack.md" ]; then
             # Check that EPISODE_CONTEXT marker is NOT present (but memories can be)
