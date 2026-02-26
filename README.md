@@ -270,6 +270,34 @@ This script:
 2. Validates episode configuration
 3. Attempts E2E trigger (if gateway running)
 4. Checks for context_pack.md and TOOLS.md artifacts
+5. Tests SMART injection (match-based yes/no)
+
+### Troubleshooting
+
+**Gateway not running**
+```bash
+# Check gateway status
+openclaw gateway status
+
+# Start gateway
+openclaw gateway start
+```
+
+**Workspace directory mismatch**
+- The hook uses workspace from `agents.defaults.workspace` in openclaw.json
+- If artifacts are missing, check: `openclaw config get agents.defaults.workspace`
+- Ensure the workspace directory exists and is writable
+
+**Artifacts not created**
+1. Check hook is enabled: `openclaw hooks list`
+2. Check hook is ready: `openclaw hooks info memory-fabric-autowire`
+3. Check config: `openclaw config get hooks.internal.entries.memory-fabric-autowire`
+4. Check hook logs in workspace: `cat ~/.memory_fabric/hook.log`
+
+**Episode injection not working**
+- Ensure `episodesAutoInject` is set to `smart` (default)
+- Check that episodes exist: `memory-hub episode list --project yourproject`
+- SMART injection triggers on semantic match OR error signatures (401, 403, timeout)
 
 ## Files
 
