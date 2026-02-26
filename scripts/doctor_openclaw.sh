@@ -13,7 +13,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 
 # Timeout settings (can override via env)
 GATEWAY_TIMEOUT_MS="${GATEWAY_TIMEOUT_MS:-5000}"
-AGENT_TIMEOUT_MS="${AGENT_TIMEOUT_MS:-30000}"
+AGENT_TIMEOUT_SEC="${AGENT_TIMEOUT_SEC:-30}"
 
 # Global state
 GATEWAY_RUNNING=false
@@ -319,7 +319,7 @@ trigger_e2e() {
     local trigger_cmd="$2"
 
     # Ensure timeout variables are set
-    local timeout_ms="${AGENT_TIMEOUT_MS:-30000}"
+    local timeout_sec="${AGENT_TIMEOUT_SEC:-30}"
 
     echo "  Trying: $trigger_name"
 
@@ -401,15 +401,21 @@ p=os.path.expanduser('~/.openclaw/agents/main/sessions/sessions.json')
 try:
     data=json.load(open(p))
     if isinstance(data, dict):
-        items=data.get('sessions') or data.get('items') or []
+        # either {sessions:[...]} or {sessionKey:{...}, ...}
+        if 'sessions' in data and isinstance(data.get('sessions'), (list, dict)):
+            items=data['sessions']
+        elif 'items' in data and isinstance(data.get('items'), (list, dict)):
+            items=data['items']
+        else:
+            items=list(data.values())
     else:
         items=data or []
     if isinstance(items, dict):
         items=list(items.values())
+    items=[x for x in items if isinstance(x, dict)]
     if items:
-        # prefer active/most recent
-        items=sorted(items, key=lambda x: x.get('updatedAt') or x.get('lastActivityAt') or '', reverse=True)
-        k=items[0].get('sessionKey') or items[0].get('id') or items[0].get('sessionId') or ''
+        items=sorted(items, key=lambda x: x.get('updatedAt') or x.get('lastActivityAt') or 0, reverse=True)
+        k=items[0].get('sessionId') or items[0].get('sessionKey') or items[0].get('id') or ''
         print(k)
 except Exception:
     pass
@@ -462,7 +468,7 @@ try_triggers() {
     if ! $triggered && has_subcmd openclaw agent; then
         local cmd="openclaw agent --agent main -m 'memory-fabric e2e test'"
         if supports_timeout_flag openclaw agent; then
-            cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
+            cmd+=" --timeout ${AGENT_TIMEOUT_SEC}"
         fi
         if trigger_with_retry "agent-main" "$cmd"; then
             triggered=true
@@ -477,7 +483,7 @@ try_triggers() {
         if [ -n "$session_id" ]; then
             local cmd="openclaw agent --session-id '${session_id}' -m 'memory-fabric e2e test'"
             if supports_timeout_flag openclaw agent; then
-                cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
+                cmd+=" --timeout ${AGENT_TIMEOUT_SEC}"
             fi
             if trigger_with_retry "agent-session" "$cmd"; then
                 triggered=true
@@ -488,15 +494,21 @@ try_triggers() {
         fi
     fi
 
-    # Strategy 3: openclaw system event (last resort)
-    if ! $triggered && has_subcmd openclaw system; then
-        local cmd="openclaw system event --text 'memory-fabric e2e test' --expect-final"
-        if supports_timeout_flag openclaw system event; then
-            cmd+=" --timeout ${AGENT_TIMEOUT_MS}"
-        fi
-        if trigger_with_retry "system-event" "$cmd"; then
-            triggered=true
-            echo "  -> Trigger succeeded: system event"
+    # Strategy 3: openclaw sessions send (explicit session target)
+    if ! $triggered && has_subcmd openclaw sessions send; then
+        local session_id=""
+        session_id=$(pick_session_id)
+        if [ -n "$session_id" ]; then
+            local cmd="openclaw sessions send --session-id '${session_id}' 'memory-fabric e2e test'"
+            if supports_timeout_flag openclaw sessions send; then
+                cmd+=" --timeout ${AGENT_TIMEOUT_SEC}"
+            fi
+            if trigger_with_retry "sessions-send" "$cmd"; then
+                triggered=true
+                echo "  -> Trigger succeeded: sessions send --session-id ${session_id}"
+            fi
+        else
+            echo "  -> No session-id discovered for sessions send"
         fi
     fi
 
@@ -536,7 +548,7 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
         if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
             echo "Artifacts missing in ${WORKSPACE_DIR}, running one recovery trigger (agent-auto)..."
             if has_subcmd openclaw agent; then
-                trigger_e2e "agent-recovery" "openclaw agent --agent main -m 'memory-fabric artifact recovery' --timeout ${AGENT_TIMEOUT_MS:-30000}" || true
+                trigger_e2e "agent-recovery" "openclaw agent --agent main -m 'memory-fabric artifact recovery' --timeout ${AGENT_TIMEOUT_SEC:-30}" || true
                 sleep 3
                 artifacts=$(check_artifacts)
                 has_context=$(echo "$artifacts" | cut -d: -f1)
@@ -658,7 +670,7 @@ if [[ "${EPISODES_AUTO_INJECT:-smart}" == "smart" ]] && [ "$GATEWAY_RUNNING" = "
 
     # Step 2: Trigger message should produce context (strict check)
     # Note: SMART injection is project-specific; verify hook ran by checking context exists
-    if openclaw agent --agent main -m "fix openclaw doctor e2e strict" --timeout $AGENT_TIMEOUT_MS >/dev/null 2>&1; then
+    if openclaw agent --agent main -m "fix openclaw doctor e2e strict" --timeout $AGENT_TIMEOUT_SEC >/dev/null 2>&1; then
         sleep 3
 
         # Check that context_pack was created/updated (proves hook ran)
@@ -688,7 +700,7 @@ if [[ "${EPISODES_AUTO_INJECT:-smart}" == "smart" ]] && [ "$GATEWAY_RUNNING" = "
     fi
 
     # Step 3: Generic message should NOT inject episode context (strict check)
-    if openclaw agent --agent main -m "hello how are you" --timeout $AGENT_TIMEOUT_MS >/dev/null 2>&1; then
+    if openclaw agent --agent main -m "hello how are you" --timeout $AGENT_TIMEOUT_SEC >/dev/null 2>&1; then
         sleep 3
 
         if [ -f "${MF_DIR}/context_pack.md" ]; then
