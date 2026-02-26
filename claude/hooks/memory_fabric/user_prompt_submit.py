@@ -149,8 +149,11 @@ def main():
     # Optional: Add episode context if enabled
     episodes_enabled = os.environ.get("MEMORY_FABRIC_EPISODES", "0") == "1"
     episode_context = ""
-    if episodes_enabled and project_id:
+    if episodes_enabled and project_id and project_id not in ("tmp", "default"):
         episode_cmd = cmd.copy()
+        # Add project filter for episode context (needed for both override and cwd-based)
+        if "--project" not in episode_cmd:
+            episode_cmd.extend(["--project", project_id])
         episode_cmd.append("--with-episodes")
         ep_output, ep_code = run_memory_hub(episode_cmd)
         if ep_code == 0:
