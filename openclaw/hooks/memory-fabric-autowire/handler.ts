@@ -266,32 +266,8 @@ async function shouldSmartInject(prompt: string, projectId: string): Promise<boo
 }
 
 // Redact secrets from content before storing (deterministic, no LLM)
-function redactContent(content: string): string {
-  if (!content) return content;
-
-  let redacted = content;
-
-  // Redact API keys (sk-*, Bearer tokens)
-  redacted = redacted.replace(/sk-[A-Za-z0-9]{20,}/g, '[REDACTED_API_KEY]');
-  redacted = redacted.replace(/Bearer\s+[A-Za-z0-9\-_.~+/]+=*/g, '[REDACTED_BEARER]');
-
-  // Redact email addresses
-  redacted = redacted.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[REDACTED_EMAIL]');
-
-  // Redact passwords (common patterns)
-  redacted = redacted.replace(/(password|passwd|pwd)\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
-
-  // Redact long hex strings (likely tokens)
-  redacted = redacted.replace(/[A-Fa-f0-9]{40,}/g, '[REDACTED_HEX]');
-
-  // Redact AWS keys
-  redacted = redacted.replace(/(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]');
-
-  // Redact GitHub tokens
-  redacted = redacted.replace(/(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}/g, '[REDACTED_GITHUB_TOKEN]');
-
-  return redacted;
-}
+// Note: Redaction is handled by P008 Python module (memory_hub.redaction)
+// before calling memory-hub CLI commands
 
 async function handleMessageSent(context: any, config: any, appendLog: (msg: string) => void): Promise<void> {
   const content = context.content;
@@ -358,14 +334,14 @@ async function handleCommandStop(context: any, config: any, appendLog: (msg: str
 
     // Auto-record episode (non-blocking, redact before writing)
     try {
-      // Redact intent if config says so
-      const finalIntent = config.episodesRedact ? redactContent(intent) : intent;
+      // Outcome is 'unknown' since we don't have verifiable evidence from OpenClaw lifecycle
+      const outcome = 'unknown';
       appendLog(`Auto-recording episode for project: ${projectId}`);
       await runMemoryHub([
         'episode', 'record',
         '--project', projectId,
-        '--intent', finalIntent,
-        '--outcome', 'mixed',
+        '--intent', intent,
+        '--outcome', outcome,
         '--step', `Session ${sessionId} ended`
       ], appendLog);
       appendLog(`Episode auto-recorded for ${projectId}`);

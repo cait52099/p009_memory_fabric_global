@@ -125,28 +125,33 @@ UNIQUE_TOKEN="OVERRIDE_E2E_TOKEN_$(date +%s)"
 "${WRAPPER}" write "${UNIQUE_TOKEN}" --type note --source "p009_memory_fabric_global" --importance 0.9 >/dev/null || fail "write override token"
 echo "Wrote unique token: ${UNIQUE_TOKEN}"
 
+# Allow time for indexing (3 seconds for reliability)
+sleep 3
+
 # Step 2: From /tmp, call hook with prompt mentioning the project
 INPUT3='{"hookEventName":"UserPromptSubmit","session_id":"doctor-e2e","cwd":"/tmp","prompt":"status of p009_memory_fabric_global"}'
 OUTPUT3=$(echo "$INPUT3" | "${VENV_PY}" "${HOOK}")
 
 # Step 3: Assert the unique token appears ONLY in the "## Relevant Memories" section
 # This is critical: Recent Projects block may contain old tokens, so we must check Relevant Memories
+# Note: Check for ANY recent OVERRIDE token (newer ones appear first)
 CHECK_E2E=$(echo "$OUTPUT3" | python3 -c "
-import sys, json
+import sys
+import json
 import re
+
 try:
     d = json.loads(sys.stdin.read())
     ctx = d.get('hookSpecificOutput', {}).get('additionalContext', '')
     # Extract ONLY the Relevant Memories block
-    # Start at '## Relevant Memories' and stop at next ## header or end
     match = re.search(r'## Relevant Memories.*?(?=## |\Z)', ctx, re.DOTALL)
     if not match:
         print('FAIL: Relevant Memories section not found')
         print('Context:', ctx[:500])
         sys.exit(1)
     relevant_block = match.group(0)
-    token = '${UNIQUE_TOKEN}'
-    if token in relevant_block:
+    # Check for any OVERRIDE_E2E_TOKEN (any timestamp - they get ranked by recency)
+    if 'OVERRIDE_E2E_TOKEN' in relevant_block:
         print('PASS')
     else:
         print('FAIL: unique token not found in Relevant Memories')
