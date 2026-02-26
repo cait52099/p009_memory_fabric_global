@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-# SessionEnd hook - promote session notes to project memory + global registry
+# SessionEnd hook - promote session notes to project memory + global registry + episode auto-record
 
 import json
 import subprocess
@@ -19,6 +19,7 @@ from _util import (
     read_hook_input,
     log_message
 )
+from episode_config import get_episodes_auto_record, get_episodes_redact
 
 
 def get_git_remote_url(cwd: str) -> str:
@@ -106,6 +107,23 @@ def main():
             log_message(f"Session summary written for {session_id}", session_id)
         else:
             log_message(f"Error: {output}", session_id)
+
+    # Auto-record episode if enabled
+    if get_episodes_auto_record() and project_id not in ("default", "tmp"):
+        try:
+            # Build episode record command
+            intent = user_prompt[:200] if user_prompt else f"Session {session_id}"
+            cmd = [
+                "episode", "record",
+                "--project", project_id,
+                "--intent", intent,
+                "--outcome", "mixed",  # Default to mixed since we don't know outcome
+                "--step", f"Session {session_id} ended"
+            ]
+            output, code = run_memory_hub(cmd)
+            log_message(f"SessionEnd: auto-recorded episode for {project_id}", session_id)
+        except Exception as e:
+            log_message(f"SessionEnd: auto-record failed: {e}", session_id)
 
     # Clean up cache
     cache_file = os.path.expanduser(f"~/.claude/hooks/memory_fabric/cache/{session_id}.json")

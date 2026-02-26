@@ -20,6 +20,11 @@ from _util import (
     write_cache,
     log_message
 )
+from episode_config import (
+    get_episodes_auto_inject,
+    get_episodes_max_tokens,
+    should_smart_inject
+)
 
 # Max recent projects to show
 MAX_RECENT_PROJECTS = 8
@@ -146,10 +151,19 @@ def main():
     if project_override:
         cmd.extend(["--project", project_id])
 
-    # Optional: Add episode context if enabled
-    episodes_enabled = os.environ.get("MEMORY_FABRIC_EPISODES", "0") == "1"
+    # Optional: Add episode context (smart injection)
+    auto_inject_mode = get_episodes_auto_inject()
     episode_context = ""
-    if episodes_enabled and project_id and project_id not in ("tmp", "default"):
+    should_inject = False
+
+    if auto_inject_mode == "1":
+        # Always inject
+        should_inject = True
+    elif auto_inject_mode == "smart":
+        # Smart injection: only if intent match or error signatures
+        should_inject = should_smart_inject(user_prompt)
+
+    if should_inject and project_id and project_id not in ("tmp", "default"):
         episode_cmd = cmd.copy()
         # Add project filter for episode context (needed for both override and cwd-based)
         if "--project" not in episode_cmd:
@@ -159,7 +173,12 @@ def main():
         if ep_code == 0:
             try:
                 ep_result = json.loads(ep_output.strip())
-                episode_context = ep_result.get("episode_context", "")
+                raw_context = ep_result.get("episode_context", "")
+                # Enforce max tokens
+                max_tokens = get_episodes_max_tokens()
+                if len(raw_context) > max_tokens * 4:
+                    raw_context = raw_context[:max_tokens * 4] + "..."
+                episode_context = raw_context
             except json.JSONDecodeError:
                 pass
 
