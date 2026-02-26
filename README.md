@@ -246,7 +246,8 @@ The OpenClaw handler supports episode configuration via the hook config:
 ### Smart Injection
 
 When `episodesAutoInject` is set to `smart` (default), episodes are automatically injected into context when:
-- Prompt contains keywords: `fix`, `bug`, `error`, `fail`, `exception`, `issue`, `problem`, `broken`
+- **Episode match**: Semantic similarity to past episodes (using `memory-hub episode match`)
+- **Error signatures**: Prompt contains error patterns like `401`, `403`, `timeout`, `connection refused`, `not found`, `permission denied`
 
 ### Redaction
 
