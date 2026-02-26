@@ -46,6 +46,17 @@ has_cmd() {
     command -v "$1" &>/dev/null
 }
 
+# New probe_cmd: tests if openclaw subcommand exists
+probe_cmd() {
+    openclaw "$@" --help >/dev/null 2>&1
+}
+
+# Capability flags (populated at runtime)
+HAS_AGENT=false
+HAS_SESSIONS_LIST=false
+HAS_SESSIONS_SEND=false
+
+# Legacy helpers (kept for compatibility)
 has_subcmd() {
     local cmd="$1"
     shift
@@ -80,6 +91,20 @@ if ! has_cmd openclaw; then
     exit 1
 fi
 echo "OK: openclaw CLI found"
+
+# Populate capability flags
+if probe_cmd agent; then
+    HAS_AGENT=true
+    echo "  -> Detected: openclaw agent"
+fi
+if probe_cmd sessions list; then
+    HAS_SESSIONS_LIST=true
+    echo "  -> Detected: openclaw sessions list"
+fi
+if probe_cmd sessions send; then
+    HAS_SESSIONS_SEND=true
+    echo "  -> Detected: openclaw sessions send"
+fi
 
 echo "==> [2/8] Check hook pack installed"
 HOOK_PATH="${OPENCLAW_DIR}/hooks/${HOOK_NAME}"
@@ -219,7 +244,7 @@ except:
         return
     fi
 
-    # Strategy 2: fallback - most recent .memory_fabric/hook.log within 60s
+    # Strategy 2: fallback - most recent .memory_fabric/hook.log within 120s
     local recent_log=""
     local recent_mtime=0
 
@@ -233,7 +258,7 @@ except:
             local age=$((now - mtime))
 
             if [ -z "$recent_log" ] || [ "$mtime" -gt "$recent_mtime" ]; then
-                if [ "$age" -lt 60 ]; then
+                if [ "$age" -lt 120 ]; then
                     recent_log="$candidate"
                     recent_mtime=$mtime
                 fi
@@ -243,7 +268,7 @@ except:
 
     if [ -n "$recent_log" ]; then
         WORKSPACE_DIR="$recent_log"
-        WORKSPACE_REASON="source=fallback: recent hook.log within 60s"
+        WORKSPACE_REASON="source=fallback: recent hook.log within 120s"
     else
         WORKSPACE_DIR=""
         WORKSPACE_REASON="source=fallback: unresolved"
@@ -389,11 +414,49 @@ pick_session_id() {
     local sid=""
     local out=""
 
-    # 1) Try status output hints
+    # 1) Prefer openclaw sessions list --json if available (audit ref: #3)
+    if [ "$HAS_SESSIONS_LIST" = "true" ]; then
+        out=$(openclaw sessions list --json 2>&1 || true)
+        if [ -n "$out" ] && echo "$out" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+            sid=$(echo "$out" | python3 - <<'PY1'
+import json, sys
+try:
+    data=json.load(sys.stdin)
+    # Handle various JSON formats: {sessions:[...]} or [{...}] or {id:...}
+    items=[]
+    if isinstance(data, list):
+        items=data
+    elif isinstance(data, dict):
+        if 'sessions' in data:
+            items=data['sessions'] or []
+        elif 'items' in data:
+            items=data['items'] or []
+        elif 'sessionId' in data:
+            print(data.get('sessionId') or data.get('id') or '')
+            sys.exit(0)
+        else:
+            items=list(data.values()) if data else []
+    items=[x for x in items if isinstance(x, dict) and x.get('id') or x.get('sessionId')]
+    if items:
+        # Sort by most recent
+        items=sorted(items, key=lambda x: x.get('updatedAt') or x.get('lastActivityAt') or x.get('createdAt') or 0, reverse=True)
+        print(items[0].get('sessionId') or items[0].get('id') or '')
+except Exception:
+    pass
+PY1
+)
+            if [ -n "$sid" ]; then
+                echo "$sid"
+                return
+            fi
+        fi
+    fi
+
+    # 2) Fallback: status output hints
     out=$(openclaw status --all --deep 2>&1 || true)
     sid=$(echo "$out" | grep -Eo '(session[-_ ]?id|sessionId)[:= ]+[A-Za-z0-9:_-]+' | head -1 | sed -E 's/.*[:= ]+//' )
 
-    # 2) Parse main agent session store directly (most reliable)
+    # 3) Fallback: parse main agent session store directly (most reliable)
     if [ -z "$sid" ]; then
         sid=$(python3 - <<'PY2'
 import json, os
@@ -465,7 +528,7 @@ try_triggers() {
     local triggered=false
 
         # Strategy 1: openclaw agent --agent main (primary)
-    if ! $triggered && has_subcmd openclaw agent; then
+    if ! $triggered && [ "$HAS_AGENT" = "true" ]; then
         local cmd="openclaw agent --agent main -m 'memory-fabric e2e test'"
         if supports_timeout_flag openclaw agent; then
             cmd+=" --timeout ${AGENT_TIMEOUT_SEC}"
@@ -477,7 +540,7 @@ try_triggers() {
     fi
 
     # Strategy 2: openclaw agent --session-id <id> (explicit target fallback)
-    if ! $triggered && has_subcmd openclaw agent; then
+    if ! $triggered && [ "$HAS_AGENT" = "true" ]; then
         local session_id=""
         session_id=$(pick_session_id)
         if [ -n "$session_id" ]; then
@@ -494,12 +557,21 @@ try_triggers() {
         fi
     fi
 
-    # Strategy 3: openclaw sessions send (explicit session target)
-    if ! $triggered && has_subcmd openclaw sessions send; then
+    # Strategy 3: openclaw sessions send (explicit session target) - audit ref: #5
+    if ! $triggered && [ "$HAS_SESSIONS_SEND" = "true" ]; then
         local session_id=""
         session_id=$(pick_session_id)
         if [ -n "$session_id" ]; then
-            local cmd="openclaw sessions send --session-id '${session_id}' 'memory-fabric e2e test'"
+            # Try --text first (preferred)
+            local cmd=""
+            if openclaw sessions send --help 2>&1 | grep -q '\--text'; then
+                cmd="openclaw sessions send --session-id '${session_id}' --text 'memory-fabric e2e test'"
+                echo "  -> Using sessions send with --text"
+            else
+                # Fallback to positional argument
+                cmd="openclaw sessions send --session-id '${session_id}' 'memory-fabric e2e test'"
+                echo "  -> Using sessions send with positional arg (--text not supported)"
+            fi
             if supports_timeout_flag openclaw sessions send; then
                 cmd+=" --timeout ${AGENT_TIMEOUT_SEC}"
             fi
@@ -556,7 +628,7 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
             fi
         fi
 
-        # Fallback: if still missing, check recent hook.log within 60s
+        # Fallback: if still missing, check recent hook.log within 120s
         if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
             echo "Artifacts still missing in ${WORKSPACE_DIR}, checking for recent hook.log..."
 
@@ -569,7 +641,7 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
                     age=$((now - mtime))
 
                     if [ -z "$fallback_ws" ] || [ "$mtime" -gt "$fallback_mtime" ]; then
-                        if [ "$age" -lt 60 ]; then
+                        if [ "$age" -lt 120 ]; then
                             fallback_ws="$candidate"
                             fallback_mtime=$mtime
                         fi
@@ -613,6 +685,44 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
             echo "  TOOLS.md: $has_tools"
             echo ""
             echo "This indicates hook didn't run or workspace mismatch."
+
+            # Print hook.log tail diagnostics (audit ref: #2)
+            echo ""
+            echo "=== Hook.log Diagnostics (last 80 lines) ==="
+            local hook_log=""
+            # First try: workspace/.memory_fabric/hook.log
+            if [ -f "${WORKSPACE_DIR}/.memory_fabric/hook.log" ]; then
+                hook_log="${WORKSPACE_DIR}/.memory_fabric/hook.log"
+                echo "Source: ${hook_log}"
+                tail -80 "$hook_log" | sed 's/^/  /'
+            else
+                # Else: search recent hook.log under workspace root (within 120s)
+                echo "Searching for recent hook.log within 120s..."
+                local recent_hook=""
+                for candidate in "${HOME}/clawd" "${HOME}" "${OPENCLAW_DIR}/workspace"; do
+                    if [ -f "${candidate}/.memory_fabric/hook.log" ]; then
+                        local mtime
+                        mtime=$(stat -f%m "${candidate}/.memory_fabric/hook.log" 2>/dev/null || stat -c %Y "${candidate}/.memory_fabric/hook.log" 2>/dev/null || echo "0")
+                        local now age
+                        now=$(date +%s)
+                        age=$((now - mtime))
+                        if [ "$age" -lt 120 ]; then
+                            if [ -z "$recent_hook" ] || [ "$mtime" -gt "$(stat -f%m "$recent_hook" 2>/dev/null || stat -c %Y "$recent_hook" 2>/dev/null || echo "0")" ]; then
+                                recent_hook="${candidate}/.memory_fabric/hook.log"
+                            fi
+                        fi
+                    fi
+                done
+                if [ -n "$recent_hook" ]; then
+                    hook_log="$recent_hook"
+                    echo "Source: ${hook_log}"
+                    tail -80 "$hook_log" | sed 's/^/  /'
+                else
+                    echo "  No hook.log found within 120s window"
+                fi
+            fi
+            echo "=== End Diagnostics ==="
+
             echo "========================================"
             echo "❌ Doctor FAIL - Trigger succeeded but artifacts missing"
             echo "========================================"
