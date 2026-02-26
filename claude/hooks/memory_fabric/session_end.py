@@ -21,6 +21,27 @@ from _util import (
 )
 from episode_config import get_episodes_auto_record, get_episodes_redact
 
+# Try to import P008 redaction module (installed in memory-fabric venv)
+REDACT_AVAILABLE = False
+try:
+    from memory_hub.redaction import redact as redact_text
+    REDACT_AVAILABLE = True
+except ImportError:
+    # Fallback: simple redaction if P008 not available
+    import re
+
+    def redact_text(text: str) -> str:
+        """Simple fallback redaction if P008 not available."""
+        if not text:
+            return text
+        # Basic patterns
+        text = re.sub(r'sk-[a-zA-Z0-9]{20,}', '<REDACTED_TOKEN>', text)
+        text = re.sub(r'sk-ant-[a-zA-Z0-9\-_]+', '<REDACTED_TOKEN>', text)
+        text = re.sub(r'gh[pousr]_[a-zA-Z0-9]{36,}', '<REDACTED_TOKEN>', text)
+        text = re.sub(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[A-Za-z]{2,}', '<REDACTED_EMAIL>', text)
+        text = re.sub(r'AKIA[0-9A-Z]{16}', '<REDACTED_AWS_KEY>', text)
+        return text
+
 
 def get_git_remote_url(cwd: str) -> str:
     """Get git remote origin URL if available."""
@@ -112,16 +133,27 @@ def main():
     if get_episodes_auto_record() and project_id not in ("default", "tmp"):
         try:
             # Build episode record command
-            intent = user_prompt[:200] if user_prompt else f"Session {session_id}"
+            intent_raw = user_prompt[:200] if user_prompt else f"Session {session_id}"
+            step_raw = f"Session {session_id} ended"
+
+            # Apply redaction if enabled (default ON)
+            if get_episodes_redact():
+                intent = redact_text(intent_raw)
+                step = redact_text(step_raw)
+                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=on)", session_id)
+            else:
+                intent = intent_raw
+                step = step_raw
+                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=off)", session_id)
+
             cmd = [
                 "episode", "record",
                 "--project", project_id,
                 "--intent", intent,
                 "--outcome", "mixed",  # Default to mixed since we don't know outcome
-                "--step", f"Session {session_id} ended"
+                "--step", step
             ]
             output, code = run_memory_hub(cmd)
-            log_message(f"SessionEnd: auto-recorded episode for {project_id}", session_id)
         except Exception as e:
             log_message(f"SessionEnd: auto-record failed: {e}", session_id)
 

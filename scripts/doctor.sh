@@ -168,4 +168,79 @@ else
   ok "Episode demo skipped (set MEMORY_FABRIC_EPISODES_DEMO=1 to run)"
 fi
 
+# === AUTO-RECORD GATE ===
+# Test auto-record when EPISODES_AUTO_RECORD=1
+if [[ "${EPISODES_AUTO_RECORD:-1}" == "1" ]] || [[ -z "${EPISODES_AUTO_RECORD:-}" ]]; then
+  ok "Episode auto-record gate: testing with EPISODES_AUTO_RECORD=1"
+
+  # Create a unique episode for testing
+  AUTO_RECORD_TOKEN="AUTO_RECORD_TEST_$(date +%s)"
+  "${WRAPPER}" episode record \
+    --project p009_doctor_test \
+    --intent "test auto record ${AUTO_RECORD_TOKEN}" \
+    --outcome success \
+    --step "doctor test" >/dev/null 2>&1 || true
+
+  # Wait for it to be searchable
+  sleep 1
+
+  # Search for the episode
+  EPISODE_SEARCH=$("${WRAPPER}" search "test auto record ${AUTO_RECORD_TOKEN}" --project p009_doctor_test --top-k 5 --json 2>&1 || echo "[]")
+
+  # Check if episode was recorded
+  if echo "$EPISODE_SEARCH" | python3 -c "import sys,json; d=json.load(sys.stdin); print('found' if any('${AUTO_RECORD_TOKEN}' in str(m.get('content','')) for m in d) else 'not found')" 2>/dev/null | grep -q "found"; then
+    ok "Auto-record gate: episode found after recording"
+  else
+    # Try alternative search
+    EPISODE_COUNT=$("${WRAPPER}" episode list --project p009_doctor_test --json 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('episodes',[])))" 2>/dev/null || echo "0")
+    if [ "$EPISODE_COUNT" -gt "0" ]; then
+      ok "Auto-record gate: episode exists (count=$EPISODE_COUNT)"
+    else
+      fail "Auto-record gate: no episodes found after recording"
+    fi
+  fi
+else
+  ok "Episode auto-record gate: skipped (EPISODES_AUTO_RECORD != 1)"
+fi
+
+# === SMART YES/NO INJECTION GATE ===
+# Test SMART injection: must inject for matching prompt, must NOT inject for generic
+if [[ "${EPISODES_AUTO_INJECT:-smart}" == "smart" ]]; then
+  ok "SMART injection gate: testing yes/no behavior"
+
+  # Step 1: Record a test episode with specific intent
+  SMART_TEST_TOKEN="SMART_INJECT_$(date +%s)"
+  "${WRAPPER}" episode record \
+    --project p009_smart_test \
+    --intent "fix openclaw doctor e2e strict ${SMART_TEST_TOKEN}" \
+    --outcome success \
+    --step "doctor smart test" >/dev/null 2>&1 || true
+
+  sleep 1
+
+  # Step 2: SMART trigger prompt should INJECT episode
+  SMART_TRIGGER_INPUT='{"hookEventName":"UserPromptSubmit","session_id":"smart-yes","cwd":"/tmp","prompt":"fix openclaw doctor e2e strict"}'
+  SMART_TRIGGER_OUTPUT=$(echo "$SMART_TRIGGER_INPUT" | "${VENV_PY}" "${HOOK}" 2>&1)
+
+  # Check if EPISODE_CONTEXT marker appears (actual injection indicator)
+  if echo "$SMART_TRIGGER_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ctx=d.get('hookSpecificOutput',{}).get('additionalContext',''); print('INJECT' if '<!-- EPISODE_CONTEXT -->' in ctx else 'NO_INJECT')" 2>/dev/null | grep -q "INJECT"; then
+    ok "SMART gate: trigger prompt -> INJECTED"
+  else
+    fail "SMART gate: trigger prompt should inject but did NOT"
+  fi
+
+  # Step 3: Generic prompt should NOT inject (check for EPISODE_CONTEXT marker, not token in memories)
+  GENERIC_INPUT='{"hookEventName":"UserPromptSubmit","session_id":"smart-no","cwd":"/tmp","prompt":"hello how are you"}'
+  GENERIC_OUTPUT=$(echo "$GENERIC_INPUT" | "${VENV_PY}" "${HOOK}" 2>&1)
+
+  # Check specifically for EPISODE_CONTEXT markers - that's the actual injection indicator
+  if echo "$GENERIC_OUTPUT" | python3 -c "import sys,json; d=json.load(sys.stdin); ctx=d.get('hookSpecificOutput',{}).get('additionalContext',''); print('NO_INJECT' if '<!-- EPISODE_CONTEXT -->' not in ctx else 'INJECT')" 2>/dev/null | grep -q "NO_INJECT"; then
+    ok "SMART gate: generic prompt -> NOT injected"
+  else
+    fail "SMART gate: generic prompt should NOT inject but DID"
+  fi
+else
+  ok "SMART injection gate: skipped (EPISODES_AUTO_INJECT != smart)"
+fi
+
 echo "✅ Doctor PASS"

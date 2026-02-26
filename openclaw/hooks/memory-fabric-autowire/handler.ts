@@ -156,7 +156,9 @@ See \`memory-hub --help\` for full command list.
 
     // Smart injection for bootstrap too
     const autoInject = config.episodesAutoInject || 'smart';
-    if (autoInject === '1' || (autoInject === 'smart' && shouldSmartInject(`agent ${agentId} starting`))) {
+    const bootstrapPrompt = `agent ${agentId} starting`;
+    const bootstrapShouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(bootstrapPrompt, projectId));
+    if (bootstrapShouldInject) {
       args.push('--project', projectId, '--with-episodes');
       appendLog(`Smart injection enabled for bootstrap project: ${projectId}`);
     }
@@ -206,7 +208,7 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
     // Smart injection: only add --with-episodes if smart mode or always
     const autoInject = config.episodesAutoInject || 'smart';
     const projectId = context.projectId || 'openclaw';
-    const shouldInject = autoInject === '1' || (autoInject === 'smart' && shouldSmartInject(content));
+    const shouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(content, projectId));
 
     if (shouldInject) {
       args.push('--project', projectId, '--with-episodes');
@@ -228,10 +230,39 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
 }
 
 // Smart injection decision
-function shouldSmartInject(prompt: string): boolean {
+// Smart injection decision - episode-match driven
+async function shouldSmartInject(prompt: string, projectId: string): Promise<boolean> {
+  // Strategy A: Try episode match first
+  if (projectId && projectId !== 'openclaw' && projectId !== 'tmp' && projectId !== 'default') {
+    try {
+      const result = await runMemoryHub([
+        'episode', 'match',
+        '--project', projectId,
+        '--prompt', prompt,
+        '--k', '1',
+        '--json'
+      ], () => {});
+
+      const data = JSON.parse(result.trim());
+      // Check if matches exist
+      const matches = data.matches || data;
+      if (Array.isArray(matches) && matches.length >= 1) {
+        return true;
+      }
+    } catch (e) {
+      // Fall through to error signature check
+    }
+  }
+
+  // Strategy B: Error signature match (secondary trigger)
   const lower = prompt.toLowerCase();
-  const keywords = ['fix', 'bug', 'error', 'fail', 'exception', 'issue', 'problem', 'broken'];
-  return keywords.some(kw => lower.includes(kw));
+  const errorSignatures = ['http 401', 'http 403', 'fts5', 'false green', 'data loss',
+    'authentication failed', 'permission denied', 'not found', 'timeout', 'connection refused'];
+  if (errorSignatures.some(sig => lower.includes(sig))) {
+    return true;
+  }
+
+  return false;
 }
 
 // Redact secrets from content before storing (deterministic, no LLM)

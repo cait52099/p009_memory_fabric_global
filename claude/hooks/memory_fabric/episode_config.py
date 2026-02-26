@@ -15,24 +15,37 @@ DEFAULTS = {
     "EPISODES_MATCH_K": "3",           # Number of episodes to match
 }
 
-CONFIG_PATH = Path.home() / ".local/share/memory_fabric/config.json"
+# Primary config path: memory-fabric (dash)
+# Fallback: memory_fabric (underscore) for backward compatibility
+CONFIG_PATH_DASH = Path.home() / ".local/share/memory-fabric/config.json"
+CONFIG_PATH_UNDERSCORE = Path.home() / ".local/share/memory_fabric/config.json"
+
+
+def get_config_path() -> Optional[Path]:
+    """Get config path with resolution: dash path first, fallback to underscore."""
+    if CONFIG_PATH_DASH.exists():
+        return CONFIG_PATH_DASH
+    if CONFIG_PATH_UNDERSCORE.exists():
+        return CONFIG_PATH_UNDERSCORE
+    return None
 
 
 def get_config(key: str) -> str:
     """
     Get config value with resolution order:
     1. Environment variable
-    2. config.json
+    2. config.json (dash path preferred, underscore fallback)
     3. Default
     """
     # 1. Check environment
     if key in os.environ:
         return os.environ[key]
 
-    # 2. Check config file
-    if CONFIG_PATH.exists():
+    # 2. Check config file(s)
+    config_path = get_config_path()
+    if config_path:
         try:
-            with open(CONFIG_PATH) as f:
+            with open(config_path) as f:
                 config = json.load(f)
                 if key in config:
                     return str(config[key])
@@ -89,24 +102,51 @@ ERROR_SIGNATURES = [
 ]
 
 
-def should_smart_inject(prompt: str, log_content: str = "") -> bool:
+def should_smart_inject(prompt: str, project_id: str = "", log_content: str = "") -> bool:
     """
-    Determine if smart injection should trigger.
+    Determine if smart injection should trigger (episode-match driven).
+
     Returns True if:
-    - prompt matches known intent (simple keyword check), OR
-    - log contains error signatures
+    (A) Episode match exists for this prompt via memory-hub episode match --k >=1
+    OR (B) Error signature match in prompt/log (secondary trigger)
+
+    Falls back to keyword heuristic only if episode match fails.
     """
+    import subprocess
+
     prompt_lower = prompt.lower()
-    log_lower = log_content.lower()
+    log_lower = log_content.lower() if log_content else ""
 
-    # Check for error signatures in log
+    # Strategy A: Try episode match first
+    if project_id and project_id not in ("tmp", "default", ""):
+        try:
+            result = subprocess.run(
+                ["memory-hub", "episode", "match",
+                 "--project", project_id,
+                 "--prompt", prompt,
+                 "--k", "1",
+                 "--json"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                import json
+                try:
+                    matches = json.loads(result.stdout.strip())
+                    if isinstance(matches, list) and len(matches) >= 1:
+                        return True
+                    # Handle if matches is dict with 'matches' key
+                    if isinstance(matches, dict) and matches.get("matches"):
+                        return True
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        except Exception:
+            pass  # Fall through to error signature check
+
+    # Strategy B: Error signature match (secondary trigger)
     for error in ERROR_SIGNATURES:
-        if error.lower() in log_lower:
+        if error.lower() in prompt_lower or error.lower() in log_lower:
             return True
-
-    # Check for programming/debug keywords in prompt
-    debug_keywords = ["fix", "bug", "error", "fail", "exception", "issue", "problem", "broken"]
-    if any(kw in prompt_lower for kw in debug_keywords):
-        return True
 
     return False

@@ -160,8 +160,8 @@ def main():
         # Always inject
         should_inject = True
     elif auto_inject_mode == "smart":
-        # Smart injection: only if intent match or error signatures
-        should_inject = should_smart_inject(user_prompt)
+        # Smart injection: episode-match driven + error signature fallback
+        should_inject = should_smart_inject(user_prompt, project_id)
 
     if should_inject and project_id and project_id not in ("tmp", "default"):
         episode_cmd = cmd.copy()
