@@ -418,11 +418,12 @@ pick_session_id() {
     if [ "$HAS_SESSIONS_LIST" = "true" ]; then
         out=$(openclaw sessions list --json 2>&1 || true)
         if [ -n "$out" ] && echo "$out" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
-            sid=$(echo "$out" | python3 - <<'PY1'
-import json, sys
+            # Write to temp file to avoid heredoc stdin issues
+            echo "$out" > "${TEMP_DIR}/sessions_json.txt"
+            sid=$(python3 -c "
+import json
 try:
-    data=json.load(sys.stdin)
-    # Handle various JSON formats: {sessions:[...]} or [{...}] or {id:...}
+    data=json.load(open('${TEMP_DIR}/sessions_json.txt'))
     items=[]
     if isinstance(data, list):
         items=data
@@ -433,18 +434,16 @@ try:
             items=data['items'] or []
         elif 'sessionId' in data:
             print(data.get('sessionId') or data.get('id') or '')
-            sys.exit(0)
+            exit(0)
         else:
             items=list(data.values()) if data else []
-    items=[x for x in items if isinstance(x, dict) and x.get('id') or x.get('sessionId')]
+    items=[x for x in items if isinstance(x, dict) and (x.get('id') or x.get('sessionId'))]
     if items:
-        # Sort by most recent
         items=sorted(items, key=lambda x: x.get('updatedAt') or x.get('lastActivityAt') or x.get('createdAt') or 0, reverse=True)
         print(items[0].get('sessionId') or items[0].get('id') or '')
 except Exception:
     pass
-PY1
-)
+" 2>/dev/null)
             if [ -n "$sid" ]; then
                 echo "$sid"
                 return
@@ -619,7 +618,7 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
         # then re-check and workspace re-evaluation.
         if [ "$has_context" != "true" ] || [ "$has_tools" != "true" ]; then
             echo "Artifacts missing in ${WORKSPACE_DIR}, running one recovery trigger (agent-auto)..."
-            if has_subcmd openclaw agent; then
+            if [ "$HAS_AGENT" = "true" ]; then
                 trigger_e2e "agent-recovery" "openclaw agent --agent main -m 'memory-fabric artifact recovery' --timeout ${AGENT_TIMEOUT_SEC:-30}" || true
                 sleep 3
                 artifacts=$(check_artifacts)
@@ -689,7 +688,7 @@ if [ "$GATEWAY_RUNNING" = "true" ]; then
             # Print hook.log tail diagnostics (audit ref: #2)
             echo ""
             echo "=== Hook.log Diagnostics (last 80 lines) ==="
-            local hook_log=""
+            hook_log=""
             # First try: workspace/.memory_fabric/hook.log
             if [ -f "${WORKSPACE_DIR}/.memory_fabric/hook.log" ]; then
                 hook_log="${WORKSPACE_DIR}/.memory_fabric/hook.log"
