@@ -136,23 +136,48 @@ def main():
             intent_raw = user_prompt[:200] if user_prompt else f"Session {session_id}"
             step_raw = f"Session {session_id} ended"
 
+            # Gather evidence from hook.log if available
+            evidence_raw = ""
+            workspace_dir = cache.get("cwd", "") if cache else ""
+            if workspace_dir:
+                hook_log_path = os.path.join(workspace_dir, ".memory_fabric", "hook.log")
+                if os.path.exists(hook_log_path):
+                    try:
+                        with open(hook_log_path, 'r') as f:
+                            lines = f.readlines()
+                            # Get last 30 lines
+                            evidence_lines = lines[-30:] if len(lines) > 30 else lines
+                            evidence_raw = "".join(evidence_lines)
+                    except Exception:
+                        pass
+
             # Apply redaction if enabled (default ON)
             if get_episodes_redact():
                 intent = redact_text(intent_raw)
                 step = redact_text(step_raw)
-                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=on)", session_id)
+                evidence = redact_text(evidence_raw) if evidence_raw else ""
+                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=on evidence=on)", session_id)
             else:
                 intent = intent_raw
                 step = step_raw
-                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=off)", session_id)
+                evidence = evidence_raw
+                log_message(f"SessionEnd: auto-recorded episode for {project_id} (redact=off evidence=off)", session_id)
 
+            # Build command - include evidence if available
             cmd = [
                 "episode", "record",
                 "--project", project_id,
                 "--intent", intent,
-                "--outcome", "mixed",  # Default to mixed since we don't know outcome
+                "--outcome", "unknown",
                 "--step", step
             ]
+            if evidence:
+                # Pass evidence via stdin or use a temp file approach
+                # For now, include key evidence in step
+                evidence_snippet = evidence.split('\n')[-3:] if evidence else []
+                if evidence_snippet:
+                    cmd.extend(["--step", f"{step} | Evidence: {' '.join(evidence_snippet)}"])
+
             output, code = run_memory_hub(cmd)
         except Exception as e:
             log_message(f"SessionEnd: auto-record failed: {e}", session_id)
