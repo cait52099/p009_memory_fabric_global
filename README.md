@@ -81,6 +81,74 @@ Re-run install to update hooks:
 bash scripts/install.sh
 ```
 
+## Episode Memory (Auto-Record + Smart Injection)
+
+Episode Memory tracks task-level success/failure paths and can automatically inject relevant episodes into your prompts.
+
+### Features
+
+- **Auto-Record**: Automatically records episodes when sessions end (default: ON)
+- **Smart Injection**: Only injects episodes when relevant (default: SMART mode)
+- **Redaction**: Secrets are automatically redacted before storage (default: ON)
+
+### Configuration
+
+Configuration resolution order:
+1. Environment variables
+2. `~/.local/share/memory_fabric/config.json`
+3. Defaults
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `EPISODES_AUTO_RECORD` | `1` | Auto-record episodes on session end |
+| `EPISODES_AUTO_INJECT` | `smart` | Auto-inject: `0` (off), `1` (always), `smart` (match-based) |
+| `EPISODES_REDACT` | `1` | Redact secrets before storing episodes |
+| `EPISODES_MAX_TOKENS` | `350` | Max tokens for episode injection |
+| `EPISODES_MATCH_K` | `3` | Number of episodes to match |
+
+### Smart Injection Policy
+
+When `EPISODES_AUTO_INJECT=smart` (default), episodes are only injected when:
+- Prompt contains keywords like `fix`, `bug`, `error`, `fail`, `exception`, `issue`, `problem`, `broken`
+- OR session logs contain error signatures (`HTTP 401`, `fts5`, `false green`, etc.)
+
+### Usage Examples
+
+```bash
+# Disable auto-record entirely
+export EPISODES_AUTO_RECORD=0
+
+# Always inject episodes (not just smart)
+export EPISODES_AUTO_INJECT=1
+
+# Disable auto-inject
+export EPISODES_AUTO_INJECT=0
+
+# Set custom config file
+echo '{"EPISODES_AUTO_INJECT": "0"}' > ~/.local/share/memory_fabric/config.json
+```
+
+### Privacy
+
+All episodes are automatically redacted before storage:
+- API keys (`sk-*`, `Bearer tokens`, etc.)
+- Emails
+- Passwords
+- Long hex strings (likely tokens)
+- AWS/GitHub keys
+
+### Recording Episodes Manually
+
+```bash
+memory-hub episode record --project myproject --intent "Fix login bug" --outcome success --step "Added validation" --json
+```
+
+### Retrieving Episodes
+
+```bash
+memory-hub episode match --project myproject --prompt "login bug" --k 5 --json
+```
+
 ## Files
 
 ```
