@@ -7,7 +7,12 @@ const HOOK_KEY = "memory-fabric-autowire";
 const DEFAULT_CONFIG = {
   contextDir: '.memory_fabric',
   maxTokens: 1200,
-  memoryHubPath: '/Users/caihongwei/.local/share/memory-fabric/bin/memory-hub'
+  memoryHubPath: '/Users/caihongwei/.local/share/memory-fabric/bin/memory-hub',
+  // Episode settings
+  episodesAutoRecord: true,
+  episodesAutoInject: 'smart', // 'smart', '0', '1'
+  episodesRedact: true,
+  episodesMaxTokens: 350
 };
 
 // Event type guards
@@ -93,9 +98,9 @@ async function memoryFabricHook(event: any): Promise<void> {
       appendLog('Handling message:sent');
       await handleMessageSent(context, config, appendLog);
     } else if (isCommandStopEvent(event)) {
-      // Handle command:stop - summarize
+      // Handle command:stop - summarize + auto-record episode
       appendLog('Handling command:stop');
-      await handleCommandStop(config, appendLog);
+      await handleCommandStop(context, config, appendLog);
     } else {
       appendLog(`Unhandled event: ${event.type}:${event.action}`);
     }
@@ -136,14 +141,27 @@ See \`memory-hub --help\` for full command list.
 
   // Also create context_pack.md during bootstrap (pre-assemble context)
   const agentId = context.agentId || 'agent';
+  const projectId = context.projectId || 'openclaw';
+
   try {
     appendLog(`Assembling bootstrap context for ${agentId}...`);
-    const result = await runMemoryHub([
+
+    // Build assemble command
+    const args = [
       'assemble',
       `agent ${agentId} starting`,
       '--max-tokens', String(config.maxTokens),
       '--json'
-    ], appendLog);
+    ];
+
+    // Smart injection for bootstrap too
+    const autoInject = config.episodesAutoInject || 'smart';
+    if (autoInject === '1' || (autoInject === 'smart' && shouldSmartInject(`agent ${agentId} starting`))) {
+      args.push('--project', projectId, '--with-episodes');
+      appendLog(`Smart injection enabled for bootstrap project: ${projectId}`);
+    }
+
+    const result = await runMemoryHub(args, appendLog);
 
     const data = JSON.parse(result.trim());
     const context_md = formatContext(data);
@@ -178,12 +196,24 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
   appendLog(`Assembling context for: ${content.slice(0, 50)}...`);
 
   try {
-    const result = await runMemoryHub([
+    const args = [
       'assemble',
       content,
       '--max-tokens', String(config.maxTokens),
       '--json'
-    ], appendLog);
+    ];
+
+    // Smart injection: only add --with-episodes if smart mode or always
+    const autoInject = config.episodesAutoInject || 'smart';
+    const projectId = context.projectId || 'openclaw';
+    const shouldInject = autoInject === '1' || (autoInject === 'smart' && shouldSmartInject(content));
+
+    if (shouldInject) {
+      args.push('--project', projectId, '--with-episodes');
+      appendLog(`Smart injection enabled for project: ${projectId}`);
+    }
+
+    const result = await runMemoryHub(args, appendLog);
 
     const data = JSON.parse(result.trim());
     const context_md = formatContext(data);
@@ -195,6 +225,41 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
     appendLog(`Failed to assemble context: ${err.message}`);
     logError(`Failed to assemble context: ${err.message}`, err);
   }
+}
+
+// Smart injection decision
+function shouldSmartInject(prompt: string): boolean {
+  const lower = prompt.toLowerCase();
+  const keywords = ['fix', 'bug', 'error', 'fail', 'exception', 'issue', 'problem', 'broken'];
+  return keywords.some(kw => lower.includes(kw));
+}
+
+// Redact secrets from content before storing (deterministic, no LLM)
+function redactContent(content: string): string {
+  if (!content) return content;
+
+  let redacted = content;
+
+  // Redact API keys (sk-*, Bearer tokens)
+  redacted = redacted.replace(/sk-[A-Za-z0-9]{20,}/g, '[REDACTED_API_KEY]');
+  redacted = redacted.replace(/Bearer\s+[A-Za-z0-9\-_.~+/]+=*/g, '[REDACTED_BEARER]');
+
+  // Redact email addresses
+  redacted = redacted.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[REDACTED_EMAIL]');
+
+  // Redact passwords (common patterns)
+  redacted = redacted.replace(/(password|passwd|pwd)\s*[:=]\s*\S+/gi, '$1=[REDACTED]');
+
+  // Redact long hex strings (likely tokens)
+  redacted = redacted.replace(/[A-Fa-f0-9]{40,}/g, '[REDACTED_HEX]');
+
+  // Redact AWS keys
+  redacted = redacted.replace(/(AKIA|ABIA|ACCA|ASIA)[A-Z0-9]{16}/g, '[REDACTED_AWS_KEY]');
+
+  // Redact GitHub tokens
+  redacted = redacted.replace(/(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}/g, '[REDACTED_GITHUB_TOKEN]');
+
+  return redacted;
 }
 
 async function handleMessageSent(context: any, config: any, appendLog: (msg: string) => void): Promise<void> {
@@ -218,9 +283,10 @@ async function handleMessageSent(context: any, config: any, appendLog: (msg: str
   }
 }
 
-async function handleCommandStop(config: any, appendLog: (msg: string) => void): Promise<void> {
+async function handleCommandStop(context: any, config: any, appendLog: (msg: string) => void): Promise<void> {
   appendLog('Summarizing session...');
 
+  // Summarize session
   try {
     await runMemoryHub([
       'summarize',
@@ -230,6 +296,52 @@ async function handleCommandStop(config: any, appendLog: (msg: string) => void):
     appendLog('Summarized and promoted session notes');
   } catch (err: any) {
     appendLog(`Failed to summarize: ${err.message}`);
+  }
+
+  // Auto-record episode if enabled (non-blocking)
+  if (config.episodesAutoRecord) {
+    const projectId = context?.projectId || 'openclaw';
+    const sessionId = context?.sessionId || 'unknown';
+
+    // Try to read intent from hook.log if available
+    let intent = `Session ${sessionId}`;
+    const contextDir = path.join(context?.workspaceDir || '', config.contextDir || '.memory_fabric');
+    const logFile = path.join(contextDir, 'hook.log');
+
+    if (fs.existsSync(logFile)) {
+      try {
+        const logContent = fs.readFileSync(logFile, 'utf-8');
+        const lines = logContent.split('\n').filter(l => l.includes('message:received'));
+        if (lines.length > 0) {
+          // Extract content from last message
+          const lastMsg = lines[lines.length - 1];
+          const match = lastMsg.match(/"content"\s*:\s*"([^"]+)"/);
+          if (match && match[1]) {
+            intent = match[1].slice(0, 200);
+          }
+        }
+      } catch (e) {
+        appendLog(`Could not read hook.log for intent: ${e}`);
+      }
+    }
+
+    // Auto-record episode (non-blocking, redact before writing)
+    try {
+      // Redact intent if config says so
+      const finalIntent = config.episodesRedact ? redactContent(intent) : intent;
+      appendLog(`Auto-recording episode for project: ${projectId}`);
+      await runMemoryHub([
+        'episode', 'record',
+        '--project', projectId,
+        '--intent', finalIntent,
+        '--outcome', 'mixed',
+        '--step', `Session ${sessionId} ended`
+      ], appendLog);
+      appendLog(`Episode auto-recorded for ${projectId}`);
+    } catch (err: any) {
+      appendLog(`Failed to auto-record episode: ${err.message}`);
+      // Never block - just log the error
+    }
   }
 }
 
@@ -253,6 +365,11 @@ function formatContext(data: any): string {
       md += `- ${content}\n`;
     }
     md += '\n';
+  }
+
+  // Add episode context if present
+  if (data.episode_context) {
+    md += data.episode_context + '\n\n';
   }
 
   md += '<!-- END_MEMORY_FABRIC_CONTEXT -->';

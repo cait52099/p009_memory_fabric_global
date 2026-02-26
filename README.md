@@ -149,6 +149,76 @@ memory-hub episode record --project myproject --intent "Fix login bug" --outcome
 memory-hub episode match --project myproject --prompt "login bug" --k 5 --json
 ```
 
+## OpenClaw Integration
+
+Memory Fabric integrates with OpenClaw via the `memory-fabric-autowire` hook pack.
+
+### Installation
+
+```bash
+cd p009_memory_fabric_global
+bash scripts/install_openclaw.sh
+```
+
+### Configuration
+
+The OpenClaw handler supports episode configuration via the hook config:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "entries": {
+        "memory-fabric-autowire": {
+          "enabled": true,
+          "contextDir": ".memory_fabric",
+          "maxTokens": 1200,
+          "episodesAutoRecord": true,
+          "episodesAutoInject": "smart",
+          "episodesRedact": true,
+          "episodesMaxTokens": 350
+        }
+      }
+    }
+  }
+}
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `episodesAutoRecord` | `true` | Auto-record episodes when sessions end |
+| `episodesAutoInject` | `smart` | Smart inject episodes: `0` (off), `1` (always), `smart` (match-based) |
+| `episodesRedact` | `true` | Redact secrets before storing episodes |
+| `episodesMaxTokens` | `350` | Max tokens for episode injection |
+
+### Smart Injection
+
+When `episodesAutoInject` is set to `smart` (default), episodes are automatically injected into context when:
+- Prompt contains keywords: `fix`, `bug`, `error`, `fail`, `exception`, `issue`, `problem`, `broken`
+
+### Redaction
+
+All episode content is automatically redacted before storage:
+- API keys (`sk-*`, `Bearer tokens`)
+- Email addresses
+- Passwords
+- Long hex strings (likely tokens)
+- AWS/GitHub keys
+
+### Doctor Script
+
+Validate the OpenClaw integration:
+
+```bash
+bash scripts/doctor_openclaw.sh
+```
+
+This script:
+1. Verifies hook is installed and enabled
+2. Validates episode configuration
+3. Attempts E2E trigger (if gateway running)
+4. Checks for context_pack.md and TOOLS.md artifacts
+
 ## Files
 
 ```

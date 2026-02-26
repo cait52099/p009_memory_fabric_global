@@ -148,7 +148,48 @@ else
     exit 1
 fi
 
-echo "==> [8/8] E2E Test"
+echo "==> [8/8] Episode Config Validation"
+echo "Checking episode configuration in handler.ts..."
+
+# Check for episode config in handler.ts
+if grep -q "episodesAutoRecord" "${HOOK_PATH}/handler.ts"; then
+    echo "OK: episodesAutoRecord config found in handler.ts"
+else
+    echo "ERROR: episodesAutoRecord not found in handler.ts"
+    exit 1
+fi
+
+if grep -q "episodesAutoInject" "${HOOK_PATH}/handler.ts"; then
+    echo "OK: episodesAutoInject config found in handler.ts"
+else
+    echo "ERROR: episodesAutoInject not found in handler.ts"
+    exit 1
+fi
+
+if grep -q "shouldSmartInject" "${HOOK_PATH}/handler.ts"; then
+    echo "OK: shouldSmartInject function found in handler.ts"
+else
+    echo "ERROR: shouldSmartInject not found in handler.ts"
+    exit 1
+fi
+
+if grep -q "redactContent" "${HOOK_PATH}/handler.ts"; then
+    echo "OK: redactContent function found in handler.ts"
+else
+    echo "ERROR: redactContent not found in handler.ts"
+    exit 1
+fi
+
+# Check if memory-hub supports episode subcommand
+if "${MEMORY_HUB}" episode --help >/dev/null 2>&1; then
+    echo "OK: memory-hub episode subcommand available"
+else
+    echo "ERROR: memory-hub episode subcommand not available"
+    exit 1
+fi
+
+echo ""
+echo "==> [9/9] E2E Test"
 
 # Resolve workspace directory
 resolve_workspace() {
