@@ -140,7 +140,9 @@ Episode Memory tracks task-level success/failure paths and can automatically inj
 ### Features
 
 - **Auto-Record**: Automatically records episodes when sessions end (default: ON)
-- **Smart Injection**: Only injects episodes when relevant (default: SMART mode)
+- **Smart Injection**: Injects episodes when relevant (default: SMART mode)
+  - SMART = (episode match by intent fingerprint) OR (error signature reflex)
+  - Signatures: `http 401`, `http 403`, `fts5`, `false green`, `authentication failed`, etc.
 - **Redaction**: Secrets are automatically redacted before storage (default: ON)
 
 ### Configuration
