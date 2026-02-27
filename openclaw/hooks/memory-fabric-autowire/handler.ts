@@ -229,6 +229,32 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
   }
 }
 
+// Default signature reflex list
+const DEFAULT_SIGNATURES = [
+  'http 401', 'http 403', 'fts5', 'false green', 'data loss',
+  'authentication failed', 'permission denied', 'not found', 'timeout', 'connection refused'
+];
+
+// Load signature reflex list from config
+function getSignatureReflexList(): string[] {
+  try {
+    const configPath = join(homedir(), '.local', 'share', 'memory-fabric', 'config.json');
+    if (existsSync(configPath)) {
+      const configData = JSON.parse(readFileSync(configPath, 'utf-8'));
+      // Try dash-path first, then underscore fallback
+      const signatures = configData.episodes?.signatureReflex ||
+                       configData.episodes_signatureReflex ||
+                       configData.signatureReflex;
+      if (Array.isArray(signatures) && signatures.length > 0) {
+        return signatures;
+      }
+    }
+  } catch (e) {
+    // Best-effort: fall through to default
+  }
+  return DEFAULT_SIGNATURES;
+}
+
 // Smart injection decision
 // Smart injection decision - episode-match driven
 async function shouldSmartInject(prompt: string, projectId: string): Promise<boolean> {
@@ -256,8 +282,7 @@ async function shouldSmartInject(prompt: string, projectId: string): Promise<boo
 
   // Strategy B: Error signature match (secondary trigger)
   const lower = prompt.toLowerCase();
-  const errorSignatures = ['http 401', 'http 403', 'fts5', 'false green', 'data loss',
-    'authentication failed', 'permission denied', 'not found', 'timeout', 'connection refused'];
+  const errorSignatures = getSignatureReflexList();
   if (errorSignatures.some(sig => lower.includes(sig))) {
     return true;
   }

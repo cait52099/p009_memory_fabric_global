@@ -160,6 +160,25 @@ Configuration resolution order:
 | `EPISODES_MAX_TOKENS` | `350` | Max tokens for episode injection |
 | `EPISODES_MATCH_K` | `3` | Number of episodes to match |
 
+#### Custom Signature Reflex List
+
+You can customize the error signatures that trigger injection by adding to config:
+
+```json
+{
+  "episodes": {
+    "signatureReflex": [
+      "HTTP 401",
+      "fts5: syntax error",
+      "false green",
+      "gateway timeout"
+    ]
+  }
+}
+```
+
+Save to: `~/.local/share/memory-fabric/config.json`
+
 ### Smart Injection Policy
 
 When `EPISODES_AUTO_INJECT=smart` (default), episodes are only injected when:
