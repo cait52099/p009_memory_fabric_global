@@ -158,7 +158,7 @@ See \`memory-hub --help\` for full command list.
     // Smart injection for bootstrap too
     const autoInject = config.episodesAutoInject || 'smart';
     const bootstrapPrompt = `agent ${agentId} starting`;
-    const bootstrapShouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(bootstrapPrompt, projectId));
+    const bootstrapShouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(bootstrapPrompt, projectId, appendLog));
     if (bootstrapShouldInject) {
       args.push('--project', projectId, '--with-episodes');
       appendLog(`Smart injection enabled for bootstrap project: ${projectId}`);
@@ -209,7 +209,7 @@ async function handleMessageReceived(context: any, contextDir: string, config: a
     // Smart injection: only add --with-episodes if smart mode or always
     const autoInject = config.episodesAutoInject || 'smart';
     const projectId = context.projectId || 'openclaw';
-    const shouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(content, projectId));
+    const shouldInject = autoInject === '1' || (autoInject === 'smart' && await shouldSmartInject(content, projectId, appendLog));
 
     if (shouldInject) {
       args.push('--project', projectId, '--with-episodes');
@@ -238,28 +238,38 @@ const DEFAULT_SIGNATURES = [
 
 // Load signature reflex list from config
 function getSignatureReflexList(appendLog: (msg: string) => void = () => {}): string[] {
-  try {
-    const configPath = path.join(os.homedir(), '.local', 'share', 'memory-fabric', 'config.json');
-    if (fs.existsSync(configPath)) {
-      const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-      // Try dash-path first, then underscore fallback
-      const signatures = configData.episodes?.signatureReflex ||
-                       configData.episodes_signatureReflex ||
-                       configData.signatureReflex;
-      if (Array.isArray(signatures) && signatures.length > 0) {
-        appendLog(`Loaded custom signatureReflex: ${signatures.length} signatures`);
-        return signatures;
+  // Try dash path first, then underscore fallback
+  const dashPath = path.join(os.homedir(), '.local', 'share', 'memory-fabric', 'config.json');
+  const underscorePath = path.join(os.homedir(), '.local', 'share', 'memory_fabric', 'config.json');
+
+  const pathsToTry = [dashPath, underscorePath];
+
+  for (const configPath of pathsToTry) {
+    try {
+      if (fs.existsSync(configPath)) {
+        appendLog(`Trying signature reflex config: ${configPath}`);
+        const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+        // Try dash-path first, then underscore fallback
+        const signatures = configData.episodes?.signatureReflex ||
+                         configData.episodes_signatureReflex ||
+                         configData.signatureReflex;
+        if (Array.isArray(signatures) && signatures.length > 0) {
+          appendLog(`Loaded custom signatureReflex from ${configPath}: ${signatures.length} signatures`);
+          return signatures;
+        }
       }
+    } catch (e: any) {
+      appendLog(`Signature reflex config load failed for ${configPath}: ${e.message}`);
     }
-  } catch (e: any) {
-    appendLog(`Signature reflex config load failed: ${e.message}, using defaults`);
   }
+
+  appendLog(`No signature reflex config found, using defaults (${DEFAULT_SIGNATURES.length} signatures)`);
   return DEFAULT_SIGNATURES;
 }
 
 // Smart injection decision
 // Smart injection decision - episode-match driven
-async function shouldSmartInject(prompt: string, projectId: string): Promise<boolean> {
+async function shouldSmartInject(prompt: string, projectId: string, appendLog: (msg: string) => void = () => {}): Promise<boolean> {
   // Strategy A: Try episode match first
   if (projectId && projectId !== 'openclaw' && projectId !== 'tmp' && projectId !== 'default') {
     try {
@@ -269,7 +279,7 @@ async function shouldSmartInject(prompt: string, projectId: string): Promise<boo
         '--prompt', prompt,
         '--k', '1',
         '--json'
-      ], () => {});
+      ], appendLog);
 
       const data = JSON.parse(result.trim());
       // Check if matches exist
@@ -284,7 +294,7 @@ async function shouldSmartInject(prompt: string, projectId: string): Promise<boo
 
   // Strategy B: Error signature match (secondary trigger)
   const lower = prompt.toLowerCase();
-  const errorSignatures = getSignatureReflexList();
+  const errorSignatures = getSignatureReflexList(appendLog);
   if (errorSignatures.some(sig => lower.includes(sig))) {
     return true;
   }
