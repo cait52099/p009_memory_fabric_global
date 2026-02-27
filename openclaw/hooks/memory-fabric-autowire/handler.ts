@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 const HOOK_KEY = "memory-fabric-autowire";
 
@@ -236,21 +237,22 @@ const DEFAULT_SIGNATURES = [
 ];
 
 // Load signature reflex list from config
-function getSignatureReflexList(): string[] {
+function getSignatureReflexList(appendLog: (msg: string) => void = () => {}): string[] {
   try {
-    const configPath = join(homedir(), '.local', 'share', 'memory-fabric', 'config.json');
-    if (existsSync(configPath)) {
-      const configData = JSON.parse(readFileSync(configPath, 'utf-8'));
+    const configPath = path.join(os.homedir(), '.local', 'share', 'memory-fabric', 'config.json');
+    if (fs.existsSync(configPath)) {
+      const configData = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
       // Try dash-path first, then underscore fallback
       const signatures = configData.episodes?.signatureReflex ||
                        configData.episodes_signatureReflex ||
                        configData.signatureReflex;
       if (Array.isArray(signatures) && signatures.length > 0) {
+        appendLog(`Loaded custom signatureReflex: ${signatures.length} signatures`);
         return signatures;
       }
     }
-  } catch (e) {
-    // Best-effort: fall through to default
+  } catch (e: any) {
+    appendLog(`Signature reflex config load failed: ${e.message}, using defaults`);
   }
   return DEFAULT_SIGNATURES;
 }
